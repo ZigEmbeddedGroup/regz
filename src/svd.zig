@@ -7,21 +7,21 @@ const Allocator = std.mem.Allocator;
 // TODO: normalize descriptions, watch out for explicit '\n's tho, we want to replicate those newlines in generated text
 
 pub const Device = struct {
-    vendor: ?[]const u8,
-    vendor_id: ?[]const u8,
-    name: ?[]const u8,
-    series: ?[]const u8,
-    version: ?[]const u8,
-    description: ?[]const u8,
-    license_text: ?[]const u8,
+    vendor: ?[]const u8 = null,
+    vendor_id: ?[]const u8 = null,
+    name: ?[]const u8 = null,
+    series: ?[]const u8 = null,
+    version: ?[]const u8 = null,
+    description: ?[]const u8 = null,
+    license_text: ?[]const u8 = null,
     address_unit_bits: usize,
     width: usize,
     register_properties: struct {
-        size: ?usize,
-        access: ?Access,
-        protection: ?[]const u8,
-        reset_value: ?[]const u8,
-        reset_mask: ?[]const u8,
+        size: ?usize = null,
+        access: ?Access = null,
+        protection: ?[]const u8 = null,
+        reset_value: ?[]const u8 = null,
+        reset_mask: ?[]const u8 = null,
     },
 
     pub fn parse(arena: *ArenaAllocator, nodes: *xml.Node) !Device {
@@ -79,6 +79,9 @@ pub const CpuName = enum {
     cortex_a53,
     cortex_a57,
     cortex_a72,
+
+    // avr
+    avr,
     other,
 
     // TODO: finish
@@ -109,6 +112,8 @@ pub const CpuName = enum {
             CpuName.cortex_m4
         else if (std.mem.eql(u8, "CM7", str))
             CpuName.cortex_m7
+        else if (std.mem.eql(u8, "AVR8", str))
+            CpuName.avr
         else
             null;
     }

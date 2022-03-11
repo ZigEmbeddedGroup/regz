@@ -373,9 +373,104 @@ fn loadNestedClusters(
 }
 
 pub fn initFromAtdf(allocator: std.mem.Allocator, doc: *xml.Doc) !Self {
-    _ = doc;
-    _ = allocator;
-    return error.Todo;
+    const root_element: *xml.Node = xml.docGetRootElement(doc) orelse return error.NoRoot;
+    const tools_node = xml.findNode(root_element, "avr-tools-device-file") orelse return error.NoToolsNode;
+    std.log.info("tools_node: {}", .{tools_node});
+
+    var db: Self = undefined;
+    var processed_one_device = false;
+    if (xml.findNode(tools_node.children orelse return error.NoChildren, "devices")) |devices_node| {
+        std.log.info("found devices node", .{});
+        var device_it: ?*xml.Node = xml.findNode(devices_node.children, "device");
+        while (device_it != null) : ({
+            device_it = xml.findNode(device_it.?.next, "device");
+            processed_one_device = true;
+        }) {
+            var arena = std.heap.ArenaAllocator.init(allocator);
+
+            // this name lowercased should line up with a zig target
+            const name: ?[]const u8 = if (xml.getAttribute(device_it, "name")) |n|
+                try arena.allocator().dupe(u8, n)
+            else
+                null;
+            const arch: ?[]const u8 = if (xml.getAttribute(device_it, "architecture")) |a|
+                try arena.allocator().dupe(u8, a)
+            else
+                null;
+            const family: ?[]const u8 = if (xml.getAttribute(device_it, "family")) |f|
+                try arena.allocator().dupe(u8, f)
+            else
+                null;
+
+            if (processed_one_device) {
+                std.log.warn("skipping device, name: {s}, arch: {s}, family: {s}", .{
+                    name,
+                    arch,
+                    family,
+                });
+                continue;
+            }
+
+            db = Self.init(arena, .{
+                .vendor = "Atmel",
+                .series = family,
+                .name = name,
+                .address_unit_bits = 16,
+                .width = 8,
+                .register_properties = .{},
+            });
+            errdefer db.deinit();
+
+            db.cpu = svd.Cpu{
+                .name = arch,
+                .revision = "0.0.1",
+                .endian = .little,
+                .nvic_prio_bits = 0,
+                .vendor_systick_config = false,
+                .device_num_interrupts = null,
+            };
+
+            const device_nodes: *xml.Node = device_it.?.children orelse continue;
+            if (xml.findNode(device_nodes, "interrupts")) |interrupts_node| {
+                var interrupt_it: ?*xml.Node = xml.findNode(interrupts_node.children.?, "interrupt");
+                while (interrupt_it != null) : (interrupt_it = xml.findNode(interrupt_it.?.next, "interrupt")) {
+                    const interrupt = svd.Interrupt{
+                        .name = if (xml.getAttribute(interrupt_it, "name")) |interrupt_name|
+                            try arena.allocator().dupe(u8, interrupt_name)
+                        else
+                            return error.NoName,
+                        .description = if (xml.getAttribute(interrupt_it, "caption")) |caption|
+                            try arena.allocator().dupe(u8, caption)
+                        else
+                            return error.NoCaption,
+                        .value = if (xml.getAttribute(interrupt_it, "index")) |index_str|
+                            try std.fmt.parseInt(usize, index_str, 0)
+                        else
+                            return error.NoIndex,
+                    };
+
+                    // if the interrupt doesn't exist then do a sorted insert
+                    if (std.sort.binarySearch(svd.Interrupt, interrupt, db.interrupts.items, {}, svd.Interrupt.compare) == null) {
+                        try db.interrupts.append(interrupt);
+                        std.sort.sort(svd.Interrupt, db.interrupts.items, {}, svd.Interrupt.lessThan);
+                    }
+                }
+            }
+        }
+    }
+
+    if (!processed_one_device) {
+        return error.NoDevice;
+    }
+
+    if (xml.findNode(tools_node, "modules")) |modules_node| {
+        _ = modules_node;
+    }
+
+    // there is also pinouts, however that's linked to IC package information,
+    // not exactly sure if we're going to do anything with that
+
+    return db;
 }
 
 pub fn deinit(self: *Self) void {
@@ -450,42 +545,45 @@ pub fn toZig(self: *Self, writer: anytype) !void {
         if (svd.CpuName.parse(self.cpu.?.name.?)) |cpu_type| {
             try writer.writeAll("\npub const VectorTable = struct {\n");
 
-            // this is an arm machine
-            try writer.writeAll(
-                \\    initial_stack_pointer: u32,
-                \\    Reset: InterruptVector = unhandled,
-                \\    NMI: InterruptVector = unhandled,
-                \\    HardFault: InterruptVector = unhandled,
-                \\
-            );
+            // TODO: isCortexM()
+            if (cpu_type != .avr) {
+                // this is an arm machine
+                try writer.writeAll(
+                    \\    initial_stack_pointer: u32,
+                    \\    Reset: InterruptVector = unhandled,
+                    \\    NMI: InterruptVector = unhandled,
+                    \\    HardFault: InterruptVector = unhandled,
+                    \\
+                );
 
-            switch (cpu_type) {
-                // Cortex M23 has a security extension and when implemented
-                // there are two vector tables (same layout though)
-                .cortex_m0, .cortex_m0plus, .cortex_m23 => try writer.writeAll(
-                    \\    reserved0: [7]u32 = undefined,
+                switch (cpu_type) {
+                    // Cortex M23 has a security extension and when implemented
+                    // there are two vector tables (same layout though)
+                    .cortex_m0, .cortex_m0plus, .cortex_m23 => try writer.writeAll(
+                        \\    reserved0: [7]u32 = undefined,
+                        \\
+                    ),
+                    .sc300, .cortex_m3, .cortex_m4, .cortex_m7, .cortex_m33 => try writer.writeAll(
+                        \\    MemManage: InterruptVector = unhandled,
+                        \\    BusFault: InterruptVector = unhandled,
+                        \\    UsageFault: InterruptVector = unhandled,
+                        \\    reserved0: [4]u32 = undefined,
+                        \\
+                    ),
+                    else => {
+                        std.log.err("unhandled cpu type: {}", .{cpu_type});
+                        return error.Todo;
+                    },
+                }
+
+                try writer.writeAll(
+                    \\    SVCall: InterruptVector = unhandled,
+                    \\    reserved1: [2]u32 = undefined,
+                    \\    PendSV: InterruptVector = unhandled,
+                    \\    SysTick: InterruptVector = unhandled,
                     \\
-                ),
-                .sc300, .cortex_m3, .cortex_m4, .cortex_m7, .cortex_m33 => try writer.writeAll(
-                    \\    MemManage: InterruptVector = unhandled,
-                    \\    BusFault: InterruptVector = unhandled,
-                    \\    UsageFault: InterruptVector = unhandled,
-                    \\    reserved0: [4]u32 = undefined,
-                    \\
-                ),
-                else => {
-                    std.log.err("unhandled cpu type: {}", .{cpu_type});
-                    return error.Todo;
-                },
+                );
             }
-
-            try writer.writeAll(
-                \\    SVCall: InterruptVector = unhandled,
-                \\    reserved1: [2]u32 = undefined,
-                \\    PendSV: InterruptVector = unhandled,
-                \\    SysTick: InterruptVector = unhandled,
-                \\
-            );
 
             var reserved_count: usize = 2;
             var expected: usize = 0;
@@ -534,8 +632,11 @@ pub fn toZig(self: *Self, writer: anytype) !void {
             const reg_range = self.registers_in_peripherals.get(peripheral_idx).?;
             const registers = self.registers.items[reg_range.begin..reg_range.end];
             if (registers.len != 0 or has_clusters) {
-                if (peripheral.description) |description| if (!isUselessDescription(description))
+                if (peripheral.description) |description| if (!isUselessDescription(description)) {
+                    try writer.writeByte('\n');
                     try writeDescription(self.arena.child_allocator, writer, description, 1);
+                };
+
                 try writer.print(
                     \\    pub const {s} = struct {{
                     \\        pub const base_address = 0x{x};
