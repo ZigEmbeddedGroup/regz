@@ -590,10 +590,7 @@ pub fn initFromAtdf(allocator: Allocator, doc: *xml.Doc) !Self {
                     var bitfield_it: ?*xml.Node = xml.findNode(register_nodes, "bitfield");
                     while (bitfield_it != null) : (bitfield_it = xml.findNode(bitfield_it.?.next, "bitfield")) {
                         try db.fields.append(atdf.parseField(&db.arena, bitfield_it.?) catch |err| switch (err) {
-                            error.InvalidMask => {
-                                std.log.warn("skipping field", .{});
-                                continue;
-                            },
+                            error.InvalidMask => continue,
                             else => return err,
                         });
                     }
