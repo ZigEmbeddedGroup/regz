@@ -42,6 +42,9 @@ fn mainImpl() anyerror!void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
+    var arena = ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
     var diag = clap.Diagnostic{};
     var res = clap.parse(clap.Help, &params, clap.parsers.default, .{ .diagnostic = &diag }) catch |err| {
         // Report useful error and exit
@@ -124,7 +127,7 @@ fn readFn(ctx: ?*anyopaque, buffer: ?[*]u8, len: c_int) callconv(.C) c_int {
     } else -1;
 }
 
-fn parseXmlDatabase(allocator: std.mem.Allocator, doc: *xml.Doc, schema: Schema) !Database {
+fn parseXmlDatabase(allocator: Allocator, doc: *xml.Doc, schema: Schema) !Database {
     return switch (schema) {
         .json => unreachable,
         .atdf => try Database.initFromAtdf(allocator, doc),
