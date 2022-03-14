@@ -7,8 +7,6 @@ const Field = @import("Field.zig");
 const ArenaAllocator = std.heap.ArenaAllocator;
 const Allocator = std.mem.Allocator;
 
-// TODO: normalize descriptions, watch out for explicit '\n's tho, we want to replicate those newlines in generated text
-
 pub const Device = struct {
     vendor: ?[]const u8 = null,
     vendor_id: ?[]const u8 = null,

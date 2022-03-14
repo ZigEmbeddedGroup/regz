@@ -295,6 +295,10 @@ fn loadRegisters(
             var field_it: ?*xml.Node = xml.findNode(fields_node.children, "field");
             while (field_it != null) : (field_it = xml.findNode(field_it.?.next, "field")) {
                 const field_nodes: *xml.Node = field_it.?.children orelse continue;
+                const field_name = xml.findValueForKey(field_nodes, "name") orelse continue;
+                if (useless_field_names.has(field_name))
+                    continue;
+
                 const field = try svd.parseField(&db.arena, field_nodes);
                 try db.fields.append(field);
 
@@ -355,10 +359,11 @@ fn loadRegisters(
             }
         }
 
-        try db.fields_in_registers.put(register_idx, .{
-            .begin = field_begin_idx,
-            .end = @intCast(u32, db.fields.items.len),
-        });
+        if (field_begin_idx != db.fields.items.len)
+            try db.fields_in_registers.put(register_idx, .{
+                .begin = field_begin_idx,
+                .end = @intCast(u32, db.fields.items.len),
+            });
     }
 }
 
@@ -752,7 +757,7 @@ pub fn toZig(self: *Self, writer: anytype) !void {
                     try writer.print("    reserved{}: u32 = undefined,\n", .{reserved_count});
                 }
 
-                if (interrupt.description) |description| if (!isUselessDescription(description))
+                if (interrupt.description) |description| if (!useless_descriptions.has(description))
                     try writeDescription(self.arena.child_allocator, writer, description, 1);
 
                 try writer.print("    {s}: InterruptVector = unhandled,\n", .{std.zig.fmtId(interrupt.name)});
@@ -784,7 +789,7 @@ pub fn toZig(self: *Self, writer: anytype) !void {
             const reg_range = self.registers_in_peripherals.get(peripheral_idx).?;
             const registers = self.registers.items[reg_range.begin..reg_range.end];
             if (registers.len != 0 or has_clusters) {
-                if (peripheral.description) |description| if (!isUselessDescription(description)) {
+                if (peripheral.description) |description| if (!useless_descriptions.has(description)) {
                     try writer.writeByte('\n');
                     try writeDescription(self.arena.child_allocator, writer, description, 1);
                 };
@@ -847,7 +852,7 @@ fn genZigCluster(
             const registers = db.registers.items[range.begin..range.end];
             try writer.writeByte('\n');
             if (cluster.description) |description|
-                if (!isUselessDescription(description))
+                if (!useless_descriptions.has(description))
                     try writeDescription(db.arena.child_allocator, writer, description, indent);
 
             if (dimension_opt) |dimension| {
@@ -918,7 +923,30 @@ fn genZigSingleRegister(
                 return error.BadWidth;
 
             try writer.writeByteNTimes(' ', indent * 4);
-            switch (nesting) {
+            if (fields[0].width == width)
+                // TODO: oof please refactor this
+                switch (nesting) {
+                    .namespaced => if (has_base_addr)
+                        try writer.print("pub const {s} = @intToPtr(*volatile {s}u{}, base_address + 0x{x});\n", .{
+                            std.zig.fmtId(name),
+                            array_prefix,
+                            width,
+                            addr_offset,
+                        })
+                    else
+                        try writer.print("pub const {s} = @intToPtr(*volatile {s}u{}, 0x{x});\n", .{
+                            std.zig.fmtId(name),
+                            array_prefix,
+                            width,
+                            addr_offset,
+                        }),
+                    .contained => try writer.print("{s}: {s}u{},\n", .{
+                        std.zig.fmtId(name),
+                        array_prefix,
+                        width,
+                    }),
+                }
+            else switch (nesting) {
                 .namespaced => if (has_base_addr)
                     try writer.print("pub const {s} = @intToPtr(*volatile {s}MmioInt({}, u{}), base_address + 0x{x});\n", .{
                         std.zig.fmtId(name),
@@ -945,12 +973,12 @@ fn genZigSingleRegister(
         } else {
             try writer.writeByteNTimes(' ', indent * 4);
             switch (nesting) {
-                .namespaced => try writer.print("pub const {s} = @intToPtr(*volatile {s}Mmio({}, packed struct{{\n", .{
+                .namespaced => try writer.print("pub const {s} = @intToPtr(*volatile {s}Mmio({}, packed struct {{\n", .{
                     std.zig.fmtId(name),
                     array_prefix,
                     width,
                 }),
-                .contained => try writer.print("{s}: {s}Mmio({}, packed struct{{\n", .{
+                .contained => try writer.print("{s}: {s}Mmio({}, packed struct {{\n", .{
                     std.zig.fmtId(name),
                     array_prefix,
                     width,
@@ -1080,7 +1108,7 @@ fn genZigFields(
 
         // TODO: default values?
         if (field.description) |description|
-            if (!isUselessDescription(description)) {
+            if (!useless_descriptions.has(description)) {
                 try writeDescription(self.arena.child_allocator, writer, description, indent);
                 if (enumerations_opt != null) {
                     try writer.writeByteNTimes(' ', indent * 4);
@@ -1331,13 +1359,10 @@ const Dimensions = struct {
     }
 };
 
-const useless_descriptions: []const []const u8 = &.{
-    "Unspecified",
-};
+const useless_descriptions = std.ComptimeStringMap(void, .{
+    .{"Unspecified"},
+});
 
-fn isUselessDescription(description: []const u8) bool {
-    return for (useless_descriptions) |useless_description| {
-        if (std.mem.eql(u8, description, useless_description))
-            break true;
-    } else false;
-}
+const useless_field_names = std.ComptimeStringMap(void, .{
+    .{"RESERVED"},
+});
