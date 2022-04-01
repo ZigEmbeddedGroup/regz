@@ -42,6 +42,8 @@ pub fn build(b: *std.build.Builder) !void {
     tests.setTarget(target);
     tests.setBuildMode(mode);
     tests.addOptions("build_options", build_options);
+    tests.addPackagePath("xml", "src/xml.zig");
+    tests.addPackagePath("Database", "src/Database.zig");
     xml.link(tests);
 
     const test_step = b.step("test", "Run unit tests");
