@@ -13,8 +13,8 @@ jobs:
     strategy:
       matrix:
         target: [
-          riscv64-linux-gnu,
-          riscv64-linux-musl,
+          #riscv64-linux-gnu,
+          #riscv64-linux-musl,
           aarch64-linux-gnu,
           aarch64-linux-musl,
           aarch64-macos,
@@ -92,8 +92,8 @@ jobs:
     strategy:
       matrix:
         target: [
-          riscv64-linux-gnu,
-          riscv64-linux-musl,
+          #riscv64-linux-gnu,
+          #riscv64-linux-musl,
           aarch64-linux-gnu,
           aarch64-linux-musl,
           aarch64-macos,
@@ -123,8 +123,8 @@ jobs:
     strategy:
       matrix:
         target: [
-          riscv64-linux-gnu,
-          riscv64-linux-musl,
+          #riscv64-linux-gnu,
+          #riscv64-linux-musl,
           aarch64-linux-gnu,
           aarch64-linux-musl,
           i386-linux-gnu,
