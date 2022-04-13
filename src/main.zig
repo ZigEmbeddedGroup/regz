@@ -116,7 +116,7 @@ fn mainImpl() anyerror!void {
         if (std.fs.path.isAbsolute(output_path)) writer: {
             if (std.fs.path.dirname(output_path)) |dirname| {
                 _ = dirname;
-                // TODO: recursively create absolute path if it doesn't exsist
+                // TODO: recursively create absolute path if it doesn't exist
             }
 
             break :writer (try std.fs.createFileAbsolute(output_path, .{})).writer();
