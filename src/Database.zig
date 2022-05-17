@@ -14,6 +14,11 @@ const Allocator = std.mem.Allocator;
 
 const Self = @This();
 
+const PeripheralIndex = u32;
+const ClusterIndex = u32;
+const RegisterIndex = u32;
+const FieldIndex = u32;
+
 const Range = struct {
     begin: u32,
     end: u32,
@@ -44,6 +49,29 @@ const Nesting = enum {
     contained,
 };
 
+fn RegisterProperties(comptime IndexType: type) type {
+    return struct {
+        /// register size in bits
+        size: std.AutoHashMapUnmanaged(IndexType, usize) = .{},
+
+        fn deinit(self: *@This(), allocator: Allocator) void {
+            self.size.deinit(allocator);
+        }
+    };
+}
+
+const RegisterPropertyTables = struct {
+    register: RegisterProperties(RegisterIndex) = .{},
+    cluster: RegisterProperties(ClusterIndex) = .{},
+    peripheral: RegisterProperties(PeripheralIndex) = .{},
+
+    fn deinit(self: *RegisterPropertyTables, allocator: Allocator) void {
+        self.register.deinit(allocator);
+        self.cluster.deinit(allocator);
+        self.peripheral.deinit(allocator);
+    }
+};
+
 allocator: Allocator,
 arena: ArenaAllocator,
 device: ?svd.Device,
@@ -57,11 +85,12 @@ enumerations: std.ArrayList(Enumeration),
 peripherals_use_interrupts: std.ArrayList(PeripheralUsesInterrupt),
 clusters_in_peripherals: std.ArrayList(ClusterInPeripheral),
 clusters_in_clusters: std.ArrayList(ClusterInCluster),
-registers_in_peripherals: std.AutoHashMap(u32, Range),
-registers_in_clusters: std.AutoHashMap(u32, Range),
-fields_in_registers: std.AutoHashMap(u32, Range),
-enumerations_in_fields: std.AutoHashMap(u32, Range),
+registers_in_peripherals: std.AutoHashMap(PeripheralIndex, Range),
+registers_in_clusters: std.AutoHashMap(ClusterIndex, Range),
+fields_in_registers: std.AutoHashMap(RegisterIndex, Range),
+enumerations_in_fields: std.AutoHashMap(FieldIndex, Range),
 dimensions: Dimensions,
+register_properties: RegisterPropertyTables = .{},
 
 /// takes ownership of arena allocator
 fn init(allocator: Allocator) Self {
@@ -79,10 +108,10 @@ fn init(allocator: Allocator) Self {
         .peripherals_use_interrupts = std.ArrayList(PeripheralUsesInterrupt).init(allocator),
         .clusters_in_peripherals = std.ArrayList(ClusterInPeripheral).init(allocator),
         .clusters_in_clusters = std.ArrayList(ClusterInCluster).init(allocator),
-        .registers_in_peripherals = std.AutoHashMap(u32, Range).init(allocator),
-        .registers_in_clusters = std.AutoHashMap(u32, Range).init(allocator),
-        .fields_in_registers = std.AutoHashMap(u32, Range).init(allocator),
-        .enumerations_in_fields = std.AutoHashMap(u32, Range).init(allocator),
+        .registers_in_peripherals = std.AutoHashMap(PeripheralIndex, Range).init(allocator),
+        .registers_in_clusters = std.AutoHashMap(ClusterIndex, Range).init(allocator),
+        .fields_in_registers = std.AutoHashMap(RegisterIndex, Range).init(allocator),
+        .enumerations_in_fields = std.AutoHashMap(FieldIndex, Range).init(allocator),
         .dimensions = Dimensions.init(allocator),
     };
 }
@@ -102,6 +131,7 @@ pub fn deinit(self: *Self) void {
     self.registers_in_clusters.deinit();
     self.enumerations_in_fields.deinit();
     self.dimensions.deinit();
+    self.register_properties.deinit(self.allocator);
     self.arena.deinit();
 }
 
@@ -1291,6 +1321,27 @@ fn genZigRegister(
 pub fn toJson(writer: anytype) !void {
     _ = writer;
     return error.Todo;
+}
+
+// TODO: get register properties from cluster
+pub fn getRegister(
+    self: Self,
+    peripheral_idx: PeripheralIndex,
+    register_idx: RegisterIndex,
+) !Register {
+    const register = self.registers.items[register_idx];
+
+    const size = self.register_properties.register.size.get(register_idx) orelse
+        self.register_properties.peripheral.size.get(peripheral_idx) orelse
+        self.device.?.register_properties.size orelse
+        return error.SizeNotFound;
+
+    return Register{
+        .name = register.name,
+        .description = register.description,
+        .addr_offset = register.addr_offset,
+        .size = size,
+    };
 }
 
 fn Derivations(comptime T: type) type {
