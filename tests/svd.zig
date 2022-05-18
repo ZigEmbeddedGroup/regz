@@ -20,10 +20,6 @@ test "cmsis example" {
     try expectEqual(@as(@TypeOf(db.cpu), null), db.cpu);
 }
 
-// TODO: register properties
-// start with `size`, getting a register will require having to search the
-// register, cluster, peripheral, or device for the fields in the
-// registerPropertiesGroup
 test "register.size from device" {
     var db = try initDbFromSvd(
         \\<device>
@@ -48,11 +44,10 @@ test "register.size from device" {
     );
     defer db.deinit();
 
-    const peripheral_idx = 0;
     const register_idx = 0;
-    const register = try db.getRegister(peripheral_idx, register_idx);
+    const register = try db.getRegister(register_idx);
 
-    try expectEqual(@as(usize, 42), register.size);
+    try expectEqual(@as(usize, 42), register.size.?);
 }
 
 test "register.size from peripheral" {
@@ -80,11 +75,10 @@ test "register.size from peripheral" {
     );
     defer db.deinit();
 
-    const peripheral_idx = 0;
     const register_idx = 0;
-    const register = try db.getRegister(peripheral_idx, register_idx);
+    const register = try db.getRegister(register_idx);
 
-    try expectEqual(@as(usize, 42), register.size);
+    try expectEqual(@as(usize, 42), register.size.?);
 }
 
 test "register.size from cluster" {
@@ -102,6 +96,7 @@ test "register.size from cluster" {
         \\        <cluster>
         \\          <name>bruh</name>
         \\          <size>42</size>
+        \\          <addressOffset>0x0</addressOffset>
         \\          <register>
         \\            <name>test</name>
         \\            <addressOffset>0x0</addressOffset>
@@ -115,11 +110,10 @@ test "register.size from cluster" {
     );
     defer db.deinit();
 
-    const peripheral_idx = 0;
     const register_idx = 0;
-    const register = try db.getRegister(peripheral_idx, register_idx);
+    const register = try db.getRegister(register_idx);
 
-    try expectEqual(@as(usize, 42), register.size);
+    try expectEqual(@as(usize, 42), register.size.?);
 }
 
 // TODO: nested cluster
@@ -149,35 +143,35 @@ test "register.size from register" {
     );
     defer db.deinit();
 
-    const peripheral_idx = 0;
     const register_idx = 0;
-    const register = try db.getRegister(peripheral_idx, register_idx);
+    const register = try db.getRegister(register_idx);
 
-    try expectEqual(@as(usize, 42), register.size);
+    try expectEqual(@as(usize, 42), register.size.?);
 }
 
-test "register.size missing" {
-    try std.testing.expectError(error.SizeNotFound, initDbFromSvd(
-        \\<device>
-        \\  <name>ARMCM3xxx</name>
-        \\  <addressUnitBits>8</addressUnitBits>
-        \\  <width>32</width>
-        \\  <peripherals>
-        \\    <peripheral>
-        \\      <name>TIMER0</name>
-        \\      <baseAddress>0x40010000</baseAddress>
-        \\      <registers>
-        \\        <register>
-        \\          <name>test</name>
-        \\          <addressOffset>0x0</addressOffset>
-        \\        </register>
-        \\      </registers>
-        \\    </peripheral>
-        \\  </peripherals>
-        \\</device>
-        \\
-    ));
-}
+// TODO: the way this is architected we'd see the error in the code generation side of things
+//test "register.size missing" {
+//    try std.testing.expectError(error.SizeNotFound, initDbFromSvd(
+//        \\<device>
+//        \\  <name>ARMCM3xxx</name>
+//        \\  <addressUnitBits>8</addressUnitBits>
+//        \\  <width>32</width>
+//        \\  <peripherals>
+//        \\    <peripheral>
+//        \\      <name>TIMER0</name>
+//        \\      <baseAddress>0x40010000</baseAddress>
+//        \\      <registers>
+//        \\        <register>
+//        \\          <name>test</name>
+//        \\          <addressOffset>0x0</addressOffset>
+//        \\        </register>
+//        \\      </registers>
+//        \\    </peripheral>
+//        \\  </peripherals>
+//        \\</device>
+//        \\
+//    ));
+//}
 
 //test "register.access" {}
 // TODO: figure out if `protection` is interesting/important for us
