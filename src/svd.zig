@@ -422,8 +422,8 @@ pub const RegisterProperties = struct {
         _ = arena;
         return RegisterProperties{
             .size = try xml.parseIntForKey(usize, arena.child_allocator, nodes, "size"),
-            .reset_value = try xml.parseIntForKey(usize, arena.child_allocator, nodes, "resetValue"),
-            .reset_mask = try xml.parseIntForKey(usize, arena.child_allocator, nodes, "resetMask"),
+            .reset_value = try xml.parseIntForKey(u64, arena.child_allocator, nodes, "resetValue"),
+            .reset_mask = try xml.parseIntForKey(u64, arena.child_allocator, nodes, "resetMask"),
             .access = if (xml.findValueForKey(nodes, "access")) |access_str|
                 try Access.parse(access_str)
             else
