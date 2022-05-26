@@ -147,8 +147,9 @@ pub fn initFromSvd(allocator: Allocator, doc: *xml.Doc) !Database {
     else
         null;
 
-    if (svd.CpuName.parse(db.cpu.?.name.?)) |cpu_type|
-        try cmsis.addCoreRegisters(&db, cpu_type);
+    if (db.cpu) |cpu| if (cpu.name) |cpu_name|
+        if (svd.CpuName.parse(cpu_name)) |cpu_type|
+            try cmsis.addCoreRegisters(&db, cpu_type);
 
     var named_derivations = Derivations([]const u8){};
     defer named_derivations.deinit(allocator);
