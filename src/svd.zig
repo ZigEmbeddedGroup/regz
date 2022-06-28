@@ -154,7 +154,7 @@ pub const Cpu = struct {
     //itcm_present: bool,
     //dtcm_present: bool,
     vtor_present: bool,
-    nvic_prio_bits: usize,
+    nvic_prio_bits: u8,
     vendor_systick_config: bool,
     device_num_interrupts: ?usize,
     //sau_num_regions: usize,
@@ -164,7 +164,10 @@ pub const Cpu = struct {
             .name = if (xml.findValueForKey(nodes, "name")) |name| try arena.allocator().dupe(u8, name) else null,
             .revision = xml.findValueForKey(nodes, "revision") orelse unreachable,
             .endian = try Endian.parse(xml.findValueForKey(nodes, "endian") orelse unreachable),
-            .nvic_prio_bits = try std.fmt.parseInt(usize, xml.findValueForKey(nodes, "nvicPrioBits") orelse unreachable, 0),
+            .nvic_prio_bits = if (xml.findValueForKey(nodes, "nvicPrioBits")) |nvic_prio_bits|
+                try std.fmt.parseInt(u8, nvic_prio_bits, 0)
+            else
+                0,
             // TODO: booleans
             .vendor_systick_config = (try xml.parseBoolean(arena.child_allocator, nodes, "vendorSystickConfig")) orelse false,
             .device_num_interrupts = if (xml.findValueForKey(nodes, "deviceNumInterrupts")) |size_str|
