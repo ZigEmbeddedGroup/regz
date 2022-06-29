@@ -61,7 +61,7 @@ const Nesting = enum {
 fn RegisterProperties(comptime IndexType: type) type {
     return struct {
         /// register size in bits
-        size: std.AutoHashMapUnmanaged(IndexType, usize) = .{},
+        size: std.AutoHashMapUnmanaged(IndexType, u64) = .{},
         access: std.AutoHashMapUnmanaged(IndexType, Access) = .{},
         reset_value: std.AutoHashMapUnmanaged(IndexType, u64) = .{},
         reset_mask: std.AutoHashMapUnmanaged(IndexType, u64) = .{},
@@ -110,7 +110,7 @@ field_access: std.AutoArrayHashMapUnmanaged(FieldIndex, Access) = .{},
 
 /// Register addresses of registers we know will exist on an MCU, it's used for
 /// deduplication when a vendor includes xml entries for those registers
-system_reg_addrs: std.AutoArrayHashMapUnmanaged(usize, void) = .{},
+system_reg_addrs: std.AutoArrayHashMapUnmanaged(u64, void) = .{},
 
 pub fn deinit(db: *Database) void {
     db.interrupts.deinit(db.gpa);
@@ -951,7 +951,7 @@ pub fn toZig(db: *Database, out_writer: anytype) !void {
 fn genZigCluster(
     db: *Database,
     writer: anytype,
-    base_addr: ?usize,
+    base_addr: ?u64,
     cluster_idx: ClusterIndex,
     nesting: Nesting,
 ) !void {
@@ -1022,7 +1022,7 @@ fn genZigSingleRegister(
     name: []const u8,
     width: usize,
     has_base_addr: bool,
-    addr_offset: usize,
+    addr_offset: u64,
     field_range_opt: ?IndexRange(FieldIndex),
     array_prefix: []const u8,
     nesting: Nesting,
@@ -1291,8 +1291,8 @@ fn genZigFields(
 fn genZigRegister(
     db: *Database,
     writer: anytype,
-    base_addr: ?usize,
-    cluster_offset: ?usize,
+    base_addr: ?u64,
+    cluster_offset: ?u64,
     reg_idx: RegisterIndex,
     register: Register,
     nesting: Nesting,
