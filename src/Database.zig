@@ -369,7 +369,7 @@ fn loadRegisters(
         const register = try svd.parseRegister(&db.arena, register_nodes);
         if (base_addr) |ba|
             if (db.system_reg_addrs.contains(ba + register.addr_offset)) {
-                std.log.warn("skipping register {s}", .{register.name});
+                std.log.debug("skipping register {s}, it is a system register", .{register.name});
                 continue;
             };
 
