@@ -61,7 +61,7 @@ const Nesting = enum {
 fn RegisterProperties(comptime IndexType: type) type {
     return struct {
         /// register size in bits
-        size: std.AutoHashMapUnmanaged(IndexType, u64) = .{},
+        size: std.AutoHashMapUnmanaged(IndexType, u16) = .{},
         access: std.AutoHashMapUnmanaged(IndexType, Access) = .{},
         reset_value: std.AutoHashMapUnmanaged(IndexType, u64) = .{},
         reset_mask: std.AutoHashMapUnmanaged(IndexType, u64) = .{},
@@ -1020,7 +1020,7 @@ fn genZigSingleRegister(
     db: *Database,
     writer: anytype,
     name: []const u8,
-    width: usize,
+    width: u32,
     has_base_addr: bool,
     addr_offset: u64,
     field_range_opt: ?IndexRange(FieldIndex),
@@ -1557,8 +1557,8 @@ pub fn getRegister(
         db.findPeripheralContainingCluster(clusters.items[clusters.items.len - 1]) orelse
             return error.PeripheralNotFound;
 
-    const size = db.registerPropertyUpwardsSearch(
-        usize,
+    const size: u16 = db.registerPropertyUpwardsSearch(
+        u16,
         "size",
         reg_idx,
         clusters.items,
