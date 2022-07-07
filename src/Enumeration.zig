@@ -1,3 +1,4 @@
+name: []const u8,
 value: usize,
 description: ?[]const u8,
 

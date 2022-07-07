@@ -396,6 +396,11 @@ fn loadRegisters(
             try db.register_properties.register.reset_mask.put(db.gpa, register_idx, reset_mask);
 
         const field_begin_idx = @intCast(FieldIndex, db.fields.items.len);
+
+        // TODO: find a way to avoid this, it is needed because fields are sorted after the if below
+        var enumerations_to_fields_mapping = std.StringHashMapUnmanaged(IndexRange(EnumIndex)){};
+        defer enumerations_to_fields_mapping.deinit(db.gpa);
+
         if (xml.findNode(register_nodes, "fields")) |fields_node| {
             var field_it: ?*xml.Node = xml.findNode(fields_node.children, "field");
             while (field_it != null) : (field_it = xml.findNode(field_it.?.next, "field")) {
@@ -417,19 +422,34 @@ fn loadRegisters(
                 if (field.access) |access|
                     try db.field_access.put(db.gpa, field_idx, access);
 
-                // TODO: enumerations at some point when there's a solid plan
-                //if (xml.findNode(field_nodes, "enumeratedValues")) |enum_values_node| {
-                //    // TODO: usage
-                //    // TODO: named_derivations
-                //    const name = xml.findValueForKey(enum_values_node, "name");
-                //    _ = name;
-                //    var enum_values_it: ?*xml.Node = xml.findNode(enum_values_node.children, "enumeratedValue");
-                //    while (enum_values_it != null) : (enum_values_it = xml.findNode(enum_values_it.?.next, "enumeratedValue")) {
-                //        const enum_nodes: *xml.Node = enum_values_it.?.children orelse continue;
-                //        const enum_value = try svd.EnumeratedValue.parse(&arena, enum_nodes);
-                //        _ = enum_value;
-                //    }
-                //}
+                const enum_begin_idx = @intCast(EnumIndex, db.enumerations.items.len);
+
+                if (xml.findNode(field_nodes, "enumeratedValues")) |enum_values_node| {
+                    // TODO: usage
+                    // TODO: named_derivations
+                    var enum_values_it: ?*xml.Node = xml.findNode(enum_values_node.children, "enumeratedValue");
+                    while (enum_values_it != null) : (enum_values_it = xml.findNode(enum_values_it.?.next, "enumeratedValue")) {
+                        const enum_nodes: *xml.Node = enum_values_it.?.children orelse continue;
+                        const enum_value = try svd.EnumeratedValue.parse(&db.arena, enum_nodes);
+
+                        try db.enumerations.append(db.gpa, .{
+                            .name = enum_value.name,
+                            .value = enum_value.value orelse {
+                                std.log.warn("skipping enumeration \"{s}\", it is missing value", .{enum_value.name});
+                                continue;
+                            },
+                            .description = enum_value.description,
+                        });
+                    }
+
+                    // TODO: check for non-exhaustive enumerations
+                    // TODO: check for overlapping enumerations
+
+                    try enumerations_to_fields_mapping.put(db.gpa, field_name, .{
+                        .begin = enum_begin_idx,
+                        .end = @intCast(EnumIndex, db.enumerations.items.len),
+                    });
+                }
             }
         }
 
@@ -463,6 +483,13 @@ fn loadRegisters(
             } else {
                 current_bit = db.fields.items[i].offset + db.fields.items[i].width;
                 i += 1;
+            }
+        }
+
+        var j = field_begin_idx;
+        while (j < db.fields.items.len) : (j += 1) {
+            if (enumerations_to_fields_mapping.get(db.fields.items[j].name)) |range| {
+                try db.enumerations_in_fields.put(db.gpa, j, range);
             }
         }
 
@@ -1279,20 +1306,24 @@ fn genZigFields(
         if (field.description) |description|
             if (!useless_descriptions.has(description)) {
                 try writeDescription(db.arena.child_allocator, writer, description);
-                if (enumerations_opt != null) {
-                    try writer.writeAll("///\n");
-                }
             };
+        if (enumerations_opt) |enumerations| {
+            try writer.print(
+                \\ {s}: extern union {{
+                \\    raw: u{},
+                \\    value: enum(u{}) {{
+                \\
+            , .{ std.zig.fmtId(field.name), field.width, field.width });
+            for (enumerations) |enumeration| {
+                if (enumeration.description) |description|
+                    try writer.print("/// {s}\n", .{description});
 
-        if (enumerations_opt) |enumerations| for (enumerations) |enumeration| {
-            try writer.print("/// 0x{x}: ", .{enumeration.value});
-            if (enumeration.description) |description|
-                try writer.print("{s}\n", .{description})
-            else
-                try writer.writeAll("undocumented\n");
-        };
-
-        try writer.print("{s}: u{},\n", .{ std.zig.fmtId(field.name), field.width });
+                try writer.print("{s} = {},\n", .{ std.zig.fmtId(enumeration.name), enumeration.value });
+            }
+            try writer.print("}},\n}},\n", .{});
+        } else {
+            try writer.print("{s}: u{},\n", .{ std.zig.fmtId(field.name), field.width });
+        }
 
         expected_bit += field.width;
     }
