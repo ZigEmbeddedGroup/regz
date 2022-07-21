@@ -3,19 +3,21 @@ steps:
     steps:
     - command: zig build test
 
-  # TODO: ask if there can be 2-dimensional matrices for build types
+
   - group: Crosscompile
     steps:
-      - label: "Target: {{matrix}} :zap:"
-        command: "zig build -Dtarget={{matrix}}"
-        matrix:
-        - "aarch64-linux-gnu"
-        - "aarch64-linux-musl"
-        - "aarch64-macos"
-        - "i386-linux-gnu"
-        - "i386-linux-musl"
-        - "i386-windows"
-        - "x86_64-linux-gnu"
-        - "x86_64-linux-musl"
-        - "x86_64-macos"
-        - "x86_64-windows-gnu"
+    - label: "Target: {{matrix.target}} :zap:"
+      command: "zig build -Dtarget={{matrix.target}}"
+      matrix:
+        setup:
+          target:
+          - "aarch64-linux-gnu"
+          - "aarch64-linux-musl"
+          - "aarch64-macos"
+          - "i386-linux-gnu"
+          - "i386-linux-musl"
+          - "i386-windows"
+          - "x86_64-linux-gnu"
+          - "x86_64-linux-musl"
+          - "x86_64-macos"
+          - "x86_64-windows-gnu"
