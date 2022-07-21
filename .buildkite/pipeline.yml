@@ -1,3 +1,6 @@
 steps:
   - label: Build and Test
     command: zig build test
+
+  - label: echo
+    command: echo what's up
