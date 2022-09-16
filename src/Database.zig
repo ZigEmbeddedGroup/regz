@@ -921,7 +921,7 @@ pub fn toZig(db: *Database, out_writer: anytype) !void {
                 if (interrupt.description) |description| if (!useless_descriptions.has(description))
                     try writeDescription(db.arena.child_allocator, writer, description);
 
-                try writer.print("    {s}: InterruptVector = unhandled,\n", .{std.zig.fmtId(interrupt.name)});
+                try writer.print("    {s}: InterruptVector = unhandled,\n", .{fmtZigId(interrupt.name)});
                 expected += 1;
             }
 
@@ -952,7 +952,7 @@ pub fn toZig(db: *Database, out_writer: anytype) !void {
                 try writeDescription(db.arena.child_allocator, writer, description);
             };
 
-            try writer.print("    pub const {s} = struct {{\n", .{std.zig.fmtId(peripheral.name)});
+            try writer.print("    pub const {s} = struct {{\n", .{fmtZigId(peripheral.name)});
             if (peripheral.base_addr) |base_addr|
                 try writer.print("        pub const base_address = 0x{x};\n", .{base_addr});
 
@@ -1056,7 +1056,7 @@ fn genZigCluster(
 
                 try writer.print("}}, base_address + 0x{x});\n", .{cluster.addr_offset});
             } else {
-                try writer.print("pub const {s} = struct {{\n", .{std.zig.fmtId(cluster.name)});
+                try writer.print("pub const {s} = struct {{\n", .{fmtZigId(cluster.name)});
                 for (registers) |_, offset| {
                     const reg_idx = @intCast(RegisterIndex, range.begin + offset);
                     const register = try db.getRegister(reg_idx);
@@ -1094,20 +1094,20 @@ fn genZigSingleRegister(
                 switch (nesting) {
                     .namespaced => if (has_base_addr)
                         try writer.print("pub const {s} = @intToPtr(*volatile {s}u{}, base_address + 0x{x});\n", .{
-                            std.zig.fmtId(name),
+                            fmtZigId(name),
                             array_prefix,
                             width,
                             addr_offset,
                         })
                     else
                         try writer.print("pub const {s} = @intToPtr(*volatile {s}u{}, 0x{x});\n", .{
-                            std.zig.fmtId(name),
+                            fmtZigId(name),
                             array_prefix,
                             width,
                             addr_offset,
                         }),
                     .contained => try writer.print("{s}: {s}u{},\n", .{
-                        std.zig.fmtId(name),
+                        fmtZigId(name),
                         array_prefix,
                         width,
                     }),
@@ -1115,7 +1115,7 @@ fn genZigSingleRegister(
             else switch (nesting) {
                 .namespaced => if (has_base_addr)
                     try writer.print("pub const {s} = @intToPtr(*volatile {s}MmioInt({}, u{}), base_address + 0x{x});\n", .{
-                        std.zig.fmtId(name),
+                        fmtZigId(name),
                         array_prefix,
                         width,
                         fields[0].width,
@@ -1123,14 +1123,14 @@ fn genZigSingleRegister(
                     })
                 else
                     try writer.print("pub const {s} = @intToPtr(*volatile {s}MmioInt({}, u{}), 0x{x});\n", .{
-                        std.zig.fmtId(name),
+                        fmtZigId(name),
                         array_prefix,
                         width,
                         fields[0].width,
                         addr_offset,
                     }),
                 .contained => try writer.print("{s}: {s}MmioInt({}, u{}),\n", .{
-                    std.zig.fmtId(name),
+                    fmtZigId(name),
                     array_prefix,
                     width,
                     fields[0].width,
@@ -1139,12 +1139,12 @@ fn genZigSingleRegister(
         } else {
             switch (nesting) {
                 .namespaced => try writer.print("pub const {s} = @intToPtr(*volatile {s}Mmio({}, packed struct {{\n", .{
-                    std.zig.fmtId(name),
+                    fmtZigId(name),
                     array_prefix,
                     width,
                 }),
                 .contained => try writer.print("{s}: {s}Mmio({}, packed struct {{\n", .{
-                    std.zig.fmtId(name),
+                    fmtZigId(name),
                     array_prefix,
                     width,
                 }),
@@ -1170,7 +1170,7 @@ fn genZigSingleRegister(
             .namespaced => if (has_base_addr)
                 if (width >= 8 and std.math.isPowerOfTwo(width))
                     try writer.print("pub const {s} = @intToPtr(*volatile {s}u{}, base_address + 0x{x});\n", .{
-                        std.zig.fmtId(name),
+                        fmtZigId(name),
                         array_prefix,
                         width,
                         addr_offset,
@@ -1187,7 +1187,7 @@ fn genZigSingleRegister(
                     };
 
                     try writer.print("pub const {s} = @intToPtr(*volatile {s}MmioInt({}, u{}), base_address + 0x{x});\n", .{
-                        std.zig.fmtId(name),
+                        fmtZigId(name),
                         array_prefix,
                         reg_width,
                         width,
@@ -1197,7 +1197,7 @@ fn genZigSingleRegister(
             else {
                 if (width >= 8 and std.math.isPowerOfTwo(width))
                     try writer.print("pub const {s} = @intToPtr(*volatile {s}u{}, 0x{x});\n", .{
-                        std.zig.fmtId(name),
+                        fmtZigId(name),
                         array_prefix,
                         width,
                         addr_offset,
@@ -1214,7 +1214,7 @@ fn genZigSingleRegister(
                     };
 
                     try writer.print("pub const {s} = @intToPtr(*volatile {s}MmioInt({}, u{}), 0x{x});\n", .{
-                        std.zig.fmtId(name),
+                        fmtZigId(name),
                         array_prefix,
                         reg_width,
                         width,
@@ -1223,7 +1223,7 @@ fn genZigSingleRegister(
                 }
             },
             .contained => try writer.print("{s}: {s}u{},\n", .{
-                std.zig.fmtId(name),
+                fmtZigId(name),
                 array_prefix,
                 width,
             }),
@@ -1250,7 +1250,7 @@ fn genZigFields(
             if (dimension.index) |dim_index| switch (dim_index) {
                 .list => |list| for (list.items) |entry| {
                     const name = try std.mem.replaceOwned(u8, db.arena.allocator(), field.name, "%s", entry);
-                    try writer.print("{s}: u{},\n", .{ std.zig.fmtId(name), field.width });
+                    try writer.print("{s}: u{},\n", .{ fmtZigId(name), field.width });
                     expected_bit += field.width;
                 },
                 .num => |num| {
@@ -1258,7 +1258,7 @@ fn genZigFields(
                     while (i < num) : (i += 1) {
                         const idx = try std.fmt.allocPrint(db.arena.allocator(), "{}", .{i});
                         const name = try std.mem.replaceOwned(u8, db.arena.allocator(), field.name, "%s", idx);
-                        try writer.print("{s}: u{},\n", .{ std.zig.fmtId(name), field.width });
+                        try writer.print("{s}: u{},\n", .{ fmtZigId(name), field.width });
                         expected_bit += field.width;
                     }
                 },
@@ -1267,7 +1267,7 @@ fn genZigFields(
                 while (i < dimension.dim) : (i += 1) {
                     const num_str = try std.fmt.allocPrint(db.arena.allocator(), "{}", .{i});
                     const name = try std.mem.replaceOwned(u8, db.arena.allocator(), field.name, "%s", num_str);
-                    try writer.print("{s}: u{},\n", .{ std.zig.fmtId(name), field.width });
+                    try writer.print("{s}: u{},\n", .{ fmtZigId(name), field.width });
                     expected_bit += field.width;
                 }
             }
@@ -1282,7 +1282,7 @@ fn genZigFields(
             expected_bit += 1;
             reserved_num += 1;
         }) {
-            try writer.print("reserved{}: u1,\n", .{reserved_num});
+            try writer.print("reserved{}: u1 = 0,\n", .{reserved_num});
         }
 
         if (expected_bit + field.width > reg_width) {
@@ -1309,20 +1309,20 @@ fn genZigFields(
             };
         if (enumerations_opt) |enumerations| {
             try writer.print(
-                \\ {s}: extern union {{
+                \\ {s}: packed union {{
                 \\    raw: u{},
                 \\    value: enum(u{}) {{
                 \\
-            , .{ std.zig.fmtId(field.name), field.width, field.width });
+            , .{ fmtZigId(field.name), field.width, field.width });
             for (enumerations) |enumeration| {
                 if (enumeration.description) |description|
                     try writer.print("/// {s}\n", .{description});
 
-                try writer.print("{s} = {},\n", .{ std.zig.fmtId(enumeration.name), enumeration.value });
+                try writer.print("{s} = {},\n", .{ fmtZigId(enumeration.name), enumeration.value });
             }
             try writer.print("}},\n}},\n", .{});
         } else {
-            try writer.print("{s}: u{},\n", .{ std.zig.fmtId(field.name), field.width });
+            try writer.print("{s}: u{},\n", .{ fmtZigId(field.name), field.width });
         }
 
         expected_bit += field.width;
@@ -1334,7 +1334,7 @@ fn genZigFields(
         expected_bit += 1;
         padding_num += 1;
     }) {
-        try writer.print("padding{}: u1,\n", .{padding_num});
+        try writer.print("padding{}: u1 = 0,\n", .{padding_num});
     }
 }
 
@@ -1780,4 +1780,23 @@ pub fn format(
         for (db.fields.items) |field, i|
             try writer.print("    {}: {}\n", .{ i, field });
     }
+}
+
+// TODO: the stdlib identifier formatting function doesn't escape 'null'. Upstream this later
+fn formatId(
+    bytes: []const u8,
+    comptime fmt: []const u8,
+    options: std.fmt.FormatOptions,
+    writer: anytype,
+) !void {
+    if (std.mem.eql(u8, "null", bytes)) {
+        try writer.writeAll("@\"null\"");
+        return;
+    }
+
+    try std.zig.fmtId(bytes).format(fmt, options, writer);
+}
+
+fn fmtZigId(bytes: []const u8) std.fmt.Formatter(formatId) {
+    return .{ .data = bytes };
 }
