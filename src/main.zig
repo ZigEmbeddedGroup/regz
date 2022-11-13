@@ -83,8 +83,8 @@ fn mainImpl() anyerror!void {
             }
 
             var stdin = std.io.getStdIn().reader();
-            const doc: *xml.Doc = xml.readIo(readFn, null, &stdin, null, null, 0) orelse return error.ReadXmlFd;
-            defer xml.freeDoc(doc);
+            var doc = try xml.Doc.fromIo(readFn, &stdin);
+            defer doc.deinit();
 
             break :blk try parseXmlDatabase(allocator, doc, schema.?);
         },
@@ -106,8 +106,9 @@ fn mainImpl() anyerror!void {
             }
 
             // all other schema types are xml based
-            const doc: *xml.Doc = xml.readFile(res.positionals[0].ptr, null, 0) orelse return error.ReadXmlFile;
-            defer xml.freeDoc(doc);
+            const path = try arena.allocator().dupeZ(u8, res.positionals[0]);
+            var doc = try xml.Doc.fromFile(path);
+            defer doc.deinit();
 
             break :blk try parseXmlDatabase(allocator, doc, schema.?);
         },
@@ -149,22 +150,23 @@ fn readFn(ctx: ?*anyopaque, buffer: ?[*]u8, len: c_int) callconv(.C) c_int {
     } else -1;
 }
 
-fn parseXmlDatabase(allocator: Allocator, doc: *xml.Doc, schema: Schema) !Database {
+fn parseXmlDatabase(allocator: Allocator, doc: xml.Doc, schema: Schema) !Database {
     return switch (schema) {
         .json => unreachable,
         .atdf => try Database.initFromAtdf(allocator, doc),
         .svd => try Database.initFromSvd(allocator, doc),
         .dslite => return error.Todo,
-        .xml => determine_type: {
-            const root_element: *xml.Node = xml.docGetRootElement(doc) orelse return error.NoRoot;
-            if (xml.findValueForKey(root_element, "device") != null)
-                break :determine_type try Database.initFromSvd(allocator, doc)
-            else if (xml.findValueForKey(root_element, "avr-tools-device-file") != null)
-                break :determine_type try Database.initFromAtdf(allocator, doc)
-            else {
-                std.log.err("unable do detect register schema type", .{});
-                return error.Explained;
-            }
-        },
+        .xml => return error.Todo,
+        //determine_type: {
+        //    const root = try doc.getRootElement();
+        //    if (xml.findValueForKey(root, "device") != null)
+        //        break :determine_type try Database.initFromSvd(allocator, doc)
+        //    else if (xml.findValueForKey(root, "avr-tools-device-file") != null)
+        //        break :determine_type try Database.initFromAtdf(allocator, doc)
+        //    else {
+        //        std.log.err("unable do detect register schema type", .{});
+        //        return error.Explained;
+        //    }
+        //},
     };
 }

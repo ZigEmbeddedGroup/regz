@@ -1,108 +1,664 @@
 const std = @import("std");
+const ArenaAllocator = std.heap.ArenaAllocator;
+const Allocator = std.mem.Allocator;
+const assert = std.debug.assert;
+
+const Database = @import("Database.zig");
+const EntityId = Database.EntityId;
+
 const xml = @import("xml.zig");
 const Peripheral = @import("Peripheral.zig");
 const Register = @import("Register.zig");
 const Field = @import("Field.zig");
 
-const ArenaAllocator = std.heap.ArenaAllocator;
-const Allocator = std.mem.Allocator;
+// TODO: scratchpad datastructure for temporary string based relationships,
+// then stitch it all together in the end
+pub fn loadIntoDb(db: *Database, doc: xml.Doc) !void {
+    const root = try doc.getRootElement();
+    var module_it = root.iterate(&.{"modules"}, "module");
+    while (module_it.next()) |entry|
+        try loadModuleType(db, entry);
 
-pub fn parsePeripheral(arena: *ArenaAllocator, node: *xml.Node) !Peripheral {
-    const allocator = arena.allocator();
-    return Peripheral{
-        .name = try allocator.dupe(u8, xml.getAttribute(node, "name") orelse return error.NoName),
-        .version = if (xml.getAttribute(node, "version")) |version|
-            try allocator.dupe(u8, version)
-        else
-            null,
-        .description = if (xml.getAttribute(node, "caption")) |caption|
-            try allocator.dupe(u8, caption)
-        else
-            null,
-        // TODO: make sure this is always null
-        .base_addr = null,
-    };
+    var device_it = root.iterate(&.{"devices"}, "device");
+    while (device_it.next()) |entry|
+        try loadDevice(db, entry);
 }
 
-pub fn parseRegister(
-    arena: *ArenaAllocator,
-    node: *xml.Node,
-    register_group_offset: ?usize,
-    has_fields: bool,
-) !Register {
-    const allocator = arena.allocator();
-    return Register{
-        .name = try allocator.dupe(u8, xml.getAttribute(node, "name") orelse return error.NoName),
-        .description = if (xml.getAttribute(node, "caption")) |caption|
-            try allocator.dupe(u8, caption)
-        else
-            null,
-        .addr_offset = if (xml.getAttribute(node, "offset")) |reg_offset_str| addr_offset: {
-            const reg_offset = try std.fmt.parseInt(usize, reg_offset_str, 0);
-            break :addr_offset if (register_group_offset) |group_offset|
-                group_offset + reg_offset
-            else
-                reg_offset;
-        } else return error.NoAddrOffset,
-        .size = if (xml.getAttribute(node, "size")) |size_str| blk: {
-            const full_size = 8 * try std.fmt.parseInt(u16, size_str, 0);
-            if (!has_fields) {
-                const mask = try std.fmt.parseInt(u64, xml.getAttribute(node, "mask") orelse break :blk full_size, 0);
+fn loadDevice(db: *Database, node: xml.Node) !void {
+    validateAttrs(node, &.{
+        "architecture",
+        "name",
+        "family",
+        "series",
+    });
 
-                // ensure it starts at bit 0
-                if (mask & 0x1 == 0)
-                    break :blk full_size;
+    const id = db.createEntity();
+    errdefer db.destroyEntity(id);
 
-                var cursor: u7 = 0;
-                while ((mask & (@as(u64, 1) << @intCast(u6, cursor))) != 0 and cursor < @bitSizeOf(u64)) : (cursor += 1) {}
+    std.log.debug("{}: creating device", .{id});
+    const name = node.getAttribute("name") orelse return error.NoDeviceName;
+    const arch = node.getAttribute("architecture") orelse return error.NoDeviceArch;
+    const family = node.getAttribute("family") orelse return error.NoDeviceFamily;
+    try db.instances.devices.put(db.gpa, id, .{});
+    try db.addName(id, name);
+    try db.addDeviceProperty(id, "arch", arch);
+    try db.addDeviceProperty(id, "family", family);
+    if (node.getAttribute("series")) |series|
+        try db.addDeviceProperty(id, "series", series);
 
-                // we now have width, make sure that the mask is contiguous
-                const width = cursor;
-                while (cursor < @bitSizeOf(u64)) : (cursor += 1) {
-                    if ((mask & (@as(u64, 1) << @intCast(u6, cursor))) != 0) {
-                        break :blk full_size;
-                    }
-                } else break :blk width;
-            }
-
-            break :blk full_size;
-        } else return error.NoSize, // if this shows up then we need to determine the default size of a register
-        // TODO: ATDF register access
-        .access = .read_write,
-        // TODO: ATDF reset_value
-        .reset_value = null,
-        // TODO: ATDF reset_mask
-        .reset_mask = null,
-    };
-}
-
-pub fn parseField(arena: *ArenaAllocator, node: *xml.Node) !Field {
-    const allocator = arena.allocator();
-    const name = try allocator.dupe(u8, xml.getAttribute(node, "name") orelse return error.NoName);
-    const mask = try std.fmt.parseInt(u64, xml.getAttribute(node, "mask") orelse return error.NoMask, 0);
-
-    var offset: u7 = 0;
-    while ((mask & (@as(u64, 1) << @intCast(u6, offset))) == 0 and offset < @bitSizeOf(usize)) : (offset += 1) {}
-
-    var cursor: u7 = offset;
-    while ((mask & (@as(u64, 1) << @intCast(u6, cursor))) != 0 and cursor < @bitSizeOf(u64)) : (cursor += 1) {}
-
-    const width = cursor - offset;
-    while (cursor < @bitSizeOf(u64)) : (cursor += 1)
-        if ((mask & (@as(u64, 1) << @intCast(u6, cursor))) != 0) {
-            std.log.warn("found mask with discontinuous bits: {s}, ignoring", .{name});
-            return error.InvalidMask;
+    var module_it = node.iterate(&.{"peripherals"}, "module");
+    while (module_it.next()) |module_node|
+        loadModuleInstances(db, module_node) catch |err| switch (err) {
+            error.MissingPeripheralType => {},
+            else => return err,
         };
 
-    return Field{
-        .name = name,
-        .description = if (xml.getAttribute(node, "caption")) |caption|
-            try allocator.dupe(u8, caption)
-        else
-            null,
-        .offset = offset,
-        .width = width,
-        // TODO: does atdf have a field level access?
-        .access = null,
+    var interrupt_it = node.iterate(&.{"interrupts"}, "interrupt");
+    while (interrupt_it.next()) |interrupt_node|
+        try loadInterrupt(db, interrupt_node, id);
+
+    // TODO:
+    // address-space.memory-segment
+    // events.generators.generator
+    // events.users.user
+    // interfaces.interface.parameters.param
+    // TODO: This is capitalized for some reason :facepalm:
+    // interrupts.Interrupt
+    // interrupts.interrupt-group
+    // parameters.param
+
+    // property-groups.property-group.property
+}
+
+// module instances are listed under atdf-tools-device-file.modules.
+fn loadModuleType(db: *Database, node: xml.Node) !void {
+    validateAttrs(node, &.{
+        "oldname",
+        "name",
+        "id",
+        "version",
+        "caption",
+        "name2",
+    });
+
+    const id = db.createEntity();
+    errdefer db.destroyEntity(id);
+
+    std.log.debug("{}: creating peripheral type", .{id});
+    try db.types.peripherals.put(db.gpa, id, .{});
+    if (node.getAttribute("name")) |name|
+        try db.addName(id, name);
+
+    if (node.getAttribute("caption")) |caption|
+        try db.addDescription(id, caption);
+
+    var register_group_it = node.iterate(&.{}, "register-group");
+    while (register_group_it.next()) |register_group_node|
+        try loadRegisterGroup(db, register_group_node, id);
+
+    var value_group_it = node.iterate(&.{}, "value-group");
+    while (value_group_it.next()) |value_group_node|
+        try loadEnum(db, value_group_node, id);
+
+    // TODO: interrupt-group
+}
+
+// loads a register group which is under a peripheral or under another
+// register-group
+fn loadRegisterGroup(
+    db: *Database,
+    node: xml.Node,
+    parent_id: EntityId,
+) !void {
+    assert(db.entityIs("type.peripheral", parent_id) or
+        db.entityIs("type.register_group", parent_id));
+
+    if (db.entityIs("type.peripheral", parent_id)) {
+        validateAttrs(node, &.{
+            "name",
+            "caption",
+            "aligned",
+            "section",
+            "size",
+        });
+    } else if (db.entityIs("type.register_group", parent_id)) {
+        validateAttrs(node, &.{
+            "name",
+            "modes",
+            "size",
+            "name-in-module",
+            "caption",
+            "count",
+            "start-index",
+            "offset",
+        });
+    }
+
+    // TODO: if a register group has the same name as the module then the
+    // registers should be flattened in the namespace
+    const id = db.createEntity();
+    errdefer db.destroyEntity(id);
+
+    std.log.debug("{}: creating register group", .{id});
+    try db.types.register_groups.put(db.gpa, id, .{});
+    if (node.getAttribute("name")) |name|
+        try db.addName(id, name);
+
+    if (node.getAttribute("caption")) |caption|
+        try db.addDescription(id, caption);
+
+    if (node.getAttribute("size")) |size|
+        try db.addSize(id, try std.fmt.parseInt(u64, size, 0));
+
+    var mode_it = node.iterate(&.{}, "mode");
+    while (mode_it.next()) |mode_node|
+        loadMode(db, mode_node, id) catch |err| {
+            std.log.err("{}: failed to load mode: {}", .{ id, err });
+        };
+
+    var register_it = node.iterate(&.{}, "register");
+    while (register_it.next()) |register_node|
+        try loadRegister(db, register_node, id);
+
+    // TODO: register-group
+
+    // connect with parent
+    if (db.types.peripherals.getEntry(parent_id)) |entry| {
+        try entry.value_ptr.put(db.gpa, id, {});
+    } else if (db.types.register_groups.getEntry(parent_id)) |entry| {
+        try entry.value_ptr.put(db.gpa, id, {});
+    } else unreachable;
+}
+
+fn loadMode(db: *Database, node: xml.Node, parent_id: EntityId) !void {
+    assert(db.entityIs("type.register_group", parent_id) or
+        db.entityIs("type.register", parent_id));
+
+    validateAttrs(node, &.{
+        "value",
+        "mask",
+        "name",
+        "qualifier",
+        "caption",
+    });
+
+    const id = db.createEntity();
+    errdefer db.destroyEntity(id);
+
+    std.log.debug("{}: creating mode", .{id});
+    const value_str = node.getAttribute("value") orelse return error.MissingModeValue;
+    const qualifier = node.getAttribute("qualifier") orelse return error.MissingModeQualifier;
+    try db.types.modes.put(db.gpa, id, .{
+        .owner = parent_id,
+        .value = try db.arena.allocator().dupe(u8, value_str),
+        .qualifier = try db.arena.allocator().dupe(u8, qualifier),
+    });
+
+    const name = node.getAttribute("name") orelse return error.MissingModeName;
+    try db.addName(id, name);
+    if (node.getAttribute("caption")) |caption|
+        try db.addDescription(id, caption);
+
+    // TODO: "mask": "optional",
+}
+
+// search for modes that the parent entity owns, and if the name matches,
+// then we have our entry. If not found then the input is malformed.
+// TODO: assert unique mode name
+fn assignModesToEntity(
+    db: *Database,
+    id: EntityId,
+    parent_id: EntityId,
+    mode_names: []const u8,
+) !void {
+    var modes = Database.Modes{};
+    errdefer modes.deinit(db.gpa);
+
+    var tok_it = std.mem.tokenize(u8, mode_names, " ");
+    while (tok_it.next()) |mode_str| {
+        var it = db.types.modes.iterator();
+        while (it.next()) |entry| if (entry.value_ptr.owner == parent_id) {
+            if (db.attrs.names.get(entry.key_ptr.*)) |name|
+                if (std.mem.eql(u8, name, mode_str)) {
+                    std.log.debug("{}: assiged mode '{s}'", .{ id, name });
+                    return;
+                };
+        } else {
+            if (db.attrs.names.get(id)) |name|
+                std.log.warn("failed to find mode '{s}' for '{s}'", .{
+                    mode_str,
+                    name,
+                })
+            else
+                std.log.warn("failed to find mode '{s}'", .{
+                    mode_str,
+                });
+
+            return error.MissingMode;
+        };
+    }
+
+    if (modes.count() > 0)
+        try db.attrs.modes.put(db.gpa, id, modes);
+}
+
+fn loadRegister(
+    db: *Database,
+    node: xml.Node,
+    register_group_id: EntityId,
+) !void {
+    assert(db.entityIs("type.register_group", register_group_id));
+
+    validateAttrs(node, &.{
+        "rw",
+        "name",
+        "access-size",
+        "modes",
+        "initval",
+        "size",
+        "access",
+        "mask",
+        "bit-addressable",
+        "atomic-op",
+        "ocd-rw",
+        "caption",
+        "count",
+        "offset",
+    });
+
+    const id = db.createEntity();
+    errdefer db.destroyEntity(id);
+
+    std.log.debug("{}: creating register", .{id});
+    const name = node.getAttribute("name") orelse return error.MissingRegisterName;
+    try db.types.registers.put(db.gpa, id, .{});
+    try db.addName(id, name);
+    if (node.getAttribute("modes")) |modes|
+        assignModesToEntity(db, id, register_group_id, modes) catch {
+            std.log.warn("failed to find mode '{s}' for register '{s}'", .{
+                modes,
+                name,
+            });
+        };
+
+    if (node.getAttribute("offset")) |offset_str| {
+        const offset = try std.fmt.parseInt(u64, offset_str, 0);
+        try db.addOffset(id, offset);
+    }
+
+    if (node.getAttribute("size")) |size_str| {
+        const size = try std.fmt.parseInt(u64, size_str, 0);
+        try db.addSize(id, size);
+    }
+
+    // assumes that modes are parsed before registers in the register group
+    var mode_it = node.iterate(&.{}, "mode");
+    while (mode_it.next()) |mode_node|
+        loadMode(db, mode_node, id) catch |err| {
+            std.log.err("{}: failed to load mode: {}", .{ id, err });
+        };
+
+    var field_it = node.iterate(&.{}, "bitfield");
+    while (field_it.next()) |field_node|
+        loadField(db, field_node, id) catch {};
+
+    if (db.types.register_groups.getEntry(register_group_id)) |entry| {
+        try entry.value_ptr.put(db.gpa, id, {});
+    } else unreachable;
+}
+
+fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
+    assert(db.entityIs("type.register", register_id));
+    validateAttrs(node, &.{
+        "caption",
+        "lsb",
+        "mask",
+        "modes",
+        "name",
+        "rw",
+        "value",
+        "values",
+    });
+
+    const name = node.getAttribute("name") orelse return error.MissingFieldName;
+    const mask_str = node.getAttribute("mask") orelse return error.MissingFieldMask;
+    const mask = std.fmt.parseInt(u64, mask_str, 0) catch |err| {
+        std.log.warn("failed to parse mask '{s}' of bitfield '{s}'", .{
+            mask_str,
+            name,
+        });
+
+        return err;
     };
+
+    const offset = @ctz(mask);
+    const leading_zeroes = @clz(mask);
+
+    // if the bitfield is discontiguous then we'll break it up into single bit
+    // fields. This assumes that the order of the bitfields is in order
+    if (@popCount(mask) != @as(u64, 64) - leading_zeroes - offset) {
+        var bit_count: u32 = 0;
+        var i = offset;
+        while (i < 32) : (i += 1) {
+            if (0 != (@as(u64, 1) << @intCast(u5, i)) & mask) {
+                const field_name = try std.fmt.allocPrint(db.arena.allocator(), "{s}_bit{}", .{
+                    name,
+                    bit_count,
+                });
+                bit_count += 1;
+
+                const id = db.createEntity();
+                errdefer db.destroyEntity(id);
+
+                std.log.debug("{}: creating field", .{id});
+                try db.addName(id, field_name);
+                try db.addOffset(id, i);
+                try db.addSize(id, 1);
+                if (node.getAttribute("caption")) |caption|
+                    try db.addDescription(id, caption);
+
+                if (node.getAttribute("modes")) |modes|
+                    assignModesToEntity(db, id, register_id, modes) catch {
+                        std.log.warn("failed to find mode '{s}' for field '{s}'", .{
+                            modes,
+                            name,
+                        });
+                    };
+
+                if (db.types.registers.getEntry(register_id)) |entry| {
+                    try entry.value_ptr.put(db.gpa, id, {});
+                } else unreachable;
+            }
+        }
+    } else {
+        const width = @popCount(mask);
+
+        const id = db.createEntity();
+        errdefer db.destroyEntity(id);
+
+        std.log.debug("{}: creating field", .{id});
+        try db.addName(id, name);
+        try db.addOffset(id, offset);
+        try db.addSize(id, width);
+        if (node.getAttribute("caption")) |caption|
+            try db.addDescription(id, caption);
+
+        // TODO: modes are space delimited, and multiple can apply to a single bitfield or register
+        if (node.getAttribute("modes")) |modes|
+            assignModesToEntity(db, id, register_id, modes) catch {
+                std.log.warn("failed to find mode '{s}' for field '{s}'", .{
+                    modes,
+                    name,
+                });
+            };
+
+        if (db.types.registers.getEntry(register_id)) |entry| {
+            try entry.value_ptr.put(db.gpa, id, {});
+        } else unreachable;
+    }
+}
+
+fn loadEnum(
+    db: *Database,
+    node: xml.Node,
+    peripheral_id: EntityId,
+) !void {
+    assert(db.entityIs("type.peripheral", peripheral_id));
+
+    validateAttrs(node, &.{
+        "name",
+        "caption",
+    });
+
+    const id = db.createEntity();
+    errdefer db.destroyEntity(id);
+
+    std.log.debug("{}: creating enum", .{id});
+    const name = node.getAttribute("name") orelse return error.MissingEnumName;
+    try db.types.enums.put(db.gpa, id, .{});
+    try db.addName(id, name);
+    if (node.getAttribute("caption")) |caption|
+        try db.addDescription(id, caption);
+
+    var value_it = node.iterate(&.{}, "value");
+    while (value_it.next()) |value_node|
+        loadEnumField(db, value_node, id) catch {};
+
+    if (db.types.peripherals.getEntry(peripheral_id)) |entry| {
+        try entry.value_ptr.put(db.gpa, id, {});
+    } else unreachable;
+}
+
+fn loadEnumField(
+    db: *Database,
+    node: xml.Node,
+    enum_id: EntityId,
+) !void {
+    assert(db.entityIs("type.enum", enum_id));
+
+    validateAttrs(node, &.{
+        "name",
+        "caption",
+        "value",
+    });
+
+    const name = node.getAttribute("name") orelse return error.MissingEnumFieldName;
+    const value_str = node.getAttribute("value") orelse {
+        std.log.warn("enum missing value: {s}", .{name});
+        return error.MissingEnumFieldValue;
+    };
+
+    const value = std.fmt.parseInt(u64, value_str, 0) catch |err| {
+        std.log.warn("failed to parse enum value '{s}' of enum field '{s}'", .{
+            value_str,
+            name,
+        });
+        return err;
+    };
+
+    const id = db.createEntity();
+    errdefer db.destroyEntity(id);
+
+    std.log.debug("{}: creating enum field", .{id});
+    try db.addName(id, name);
+    try db.types.enum_fields.put(db.gpa, id, value);
+    if (node.getAttribute("caption")) |caption|
+        try db.addDescription(id, caption);
+
+    if (db.types.enums.getEntry(enum_id)) |entry| {
+        try entry.value_ptr.put(db.gpa, enum_id, {});
+    } else unreachable;
+}
+
+// module instances are listed under atdf-tools-device-file.devices.device.peripherals
+fn loadModuleInstances(db: *Database, node: xml.Node) !void {
+    const module_name = node.getAttribute("name") orelse return error.MissingModuleName;
+    const type_id = blk: {
+        var periph_it = db.types.peripherals.iterator();
+        while (periph_it.next()) |entry| {
+            if (db.attrs.names.get(entry.key_ptr.*)) |entry_name|
+                if (std.mem.eql(u8, entry_name, module_name))
+                    break :blk entry.key_ptr.*;
+        } else {
+            std.log.warn("failed to find the '{s}' peripheral type", .{
+                module_name,
+            });
+            return error.MissingPeripheralType;
+        }
+    };
+
+    var instance_it = node.iterate(&.{}, "instance");
+    while (instance_it.next()) |instance_node|
+        try loadModuleInstance(db, instance_node, type_id);
+}
+
+fn loadModuleInstance(db: *Database, node: xml.Node, peripheral_type_id: EntityId) !void {
+    assert(db.entityIs("type.peripheral", peripheral_type_id));
+
+    validateAttrs(node, &.{
+        "oldname",
+        "name",
+        "caption",
+    });
+
+    const id = db.createEntity();
+    errdefer db.destroyEntity(id);
+
+    std.log.debug("{}: creating module instance", .{id});
+    const name = node.getAttribute("name") orelse return error.MissingInstanceName;
+    try db.instances.peripherals.put(db.gpa, id, .{ .type_id = peripheral_type_id });
+    try db.addName(id, name);
+
+    var register_group_it = node.iterate(&.{}, "register-group");
+    while (register_group_it.next()) |register_group_node|
+        loadRegisterGroupInstance(db, register_group_node, id, peripheral_type_id) catch {};
+
+    var signal_it = node.iterate(&.{"signals"}, "signal");
+    while (signal_it.next()) |signal_node|
+        try loadSignal(db, signal_node, id);
+
+    // TODO:
+    // clock-groups.clock-group.clock
+    // parameters.param
+}
+
+fn loadRegisterGroupInstance(
+    db: *Database,
+    node: xml.Node,
+    peripheral_id: EntityId,
+    peripheral_type_id: EntityId,
+) !void {
+    assert(db.entityIs("instance.peripheral", peripheral_id));
+    assert(db.entityIs("type.peripheral", peripheral_type_id));
+
+    validateAttrs(node, &.{
+        "name",
+        "address-space",
+        "version",
+        "size",
+        "name-in-module",
+        "caption",
+        "id",
+        "offset",
+    });
+
+    const id = db.createEntity();
+    errdefer db.destroyEntity(id);
+
+    std.log.debug("{}: creating register group instance", .{id});
+    const name = node.getAttribute("name") orelse return error.MissingInstanceName;
+    // TODO: this isn't always a set value, not sure what to do if it's left out
+    const name_in_module = node.getAttribute("name-in-module") orelse {
+        std.log.warn("no 'name-in-module' for register group '{s}'", .{
+            name,
+        });
+
+        return error.MissingNameInModule;
+    };
+
+    const type_id = blk: {
+        var type_it = db.types.peripherals.get(peripheral_type_id).?.iterator();
+        while (type_it.next()) |entry| {
+            if (db.attrs.names.get(entry.key_ptr.*)) |entry_name|
+                if (std.mem.eql(u8, entry_name, name_in_module))
+                    break :blk entry.key_ptr.*;
+        } else return error.MissingRegisterGroupType;
+    };
+
+    try db.instances.register_groups.put(db.gpa, id, type_id);
+    try db.addName(id, name);
+    if (node.getAttribute("caption")) |caption|
+        try db.addDescription(id, caption);
+
+    if (node.getAttribute("size")) |size_str| {
+        const size = try std.fmt.parseInt(u64, size_str, 0);
+        try db.addSize(id, size);
+    }
+
+    if (node.getAttribute("offset")) |offset_str| {
+        const offset = try std.fmt.parseInt(u64, offset_str, 0);
+        try db.addOffset(id, offset);
+    }
+
+    if (db.instances.peripherals.getEntry(peripheral_id)) |entry| {
+        try entry.value_ptr.children.put(db.gpa, id, {});
+    } else unreachable;
+
+    // TODO:
+    // "address-space": "optional",
+    // "version": "optional",
+    // "id": "optional",
+}
+
+fn loadSignal(db: *Database, node: xml.Node, peripheral_id: EntityId) !void {
+    assert(db.entityIs("instance.peripheral", peripheral_id));
+
+    validateAttrs(node, &.{
+        "group",
+        "index",
+        "pad",
+        "function",
+        "field",
+        "ioset",
+    });
+
+    // TODO: pads
+}
+
+// TODO: there are fields like irq-index
+fn loadInterrupt(db: *Database, node: xml.Node, device_id: EntityId) !void {
+    assert(db.entityIs("instance.device", device_id));
+
+    validateAttrs(node, &.{
+        "index",
+        "name",
+        "irq-caption",
+        "alternate-name",
+        "irq-index",
+        "caption",
+        // TODO: probably connects module instance to interrupt
+        "module-instance",
+        "irq-name",
+        "alternate-caption",
+    });
+
+    const id = db.createEntity();
+    errdefer db.destroyEntity(id);
+
+    const name = node.getAttribute("name") orelse return error.MissingInterruptName;
+    const index_str = node.getAttribute("index") orelse return error.MissingInterruptIndex;
+    const index = std.fmt.parseInt(i32, index_str, 0) catch |err| {
+        std.log.warn("failed to parse value '{s}' of interrupt '{s}'", .{
+            index_str,
+            name,
+        });
+        return err;
+    };
+
+    std.log.debug("{}: creating interrupt {}", .{ id, index });
+    try db.instances.interrupts.put(db.gpa, id, index);
+    try db.addName(id, name);
+    if (node.getAttribute("caption")) |caption|
+        try db.addDescription(id, caption);
+
+    if (db.instances.devices.getEntry(device_id)) |entry|
+        try entry.value_ptr.interrupts.put(db.gpa, id, {})
+    else
+        unreachable;
+}
+
+// for now just emit warning logs when the input has attributes that it shouldn't have
+// TODO: better output
+fn validateAttrs(node: xml.Node, attrs: []const []const u8) void {
+    var it = node.iterateAttrs();
+    while (it.next()) |attr| {
+        for (attrs) |expected_attr| {
+            if (std.mem.eql(u8, attr.key, expected_attr))
+                break;
+        } else std.log.warn("line {}: the '{s}' isn't usually found in the '{s}' element, this could mean unhandled ATDF behaviour or your input is malformed", .{
+            node.impl.line,
+            attr.key,
+            std.mem.span(node.impl.name),
+        });
+    }
 }
