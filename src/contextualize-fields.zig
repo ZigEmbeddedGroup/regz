@@ -39,9 +39,14 @@ pub fn main() !void {
     if (!std.mem.eql(u8, components.items[0], std.mem.span(root.impl.name)))
         return;
 
+    var base = std.StringHashMapUnmanaged([]const u8){};
+    defer base.deinit(gpa.allocator());
+
+    try base.put(gpa.allocator(), "path", path);
     var context = std.StringHashMap(std.StringHashMapUnmanaged([]const u8)).init(gpa.allocator());
     defer context.deinit();
 
+    try context.put("file", base);
     const stdout = std.io.getStdOut().writer();
     try recursiveSearchAndPrint(
         gpa.allocator(),

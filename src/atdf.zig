@@ -291,6 +291,18 @@ fn loadRegister(
         try db.addSize(id, size);
     }
 
+    if (node.getAttribute("rw")) |access_str| blk: {
+        const access = accessFromString(access_str) catch break :blk;
+        switch (access) {
+            .read_only, .write_only => try db.attrs.access.put(
+                db.gpa,
+                id,
+                access,
+            ),
+            else => {},
+        }
+    }
+
     // assumes that modes are parsed before registers in the register group
     var mode_it = node.iterate(&.{}, "mode");
     while (mode_it.next()) |mode_node|
@@ -365,6 +377,18 @@ fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
                         });
                     };
 
+                if (node.getAttribute("rw")) |access_str| blk: {
+                    const access = accessFromString(access_str) catch break :blk;
+                    switch (access) {
+                        .read_only, .write_only => try db.attrs.access.put(
+                            db.gpa,
+                            id,
+                            access,
+                        ),
+                        else => {},
+                    }
+                }
+
                 if (db.types.registers.getEntry(register_id)) |entry| {
                     try entry.value_ptr.put(db.gpa, id, {});
                 } else unreachable;
@@ -392,10 +416,33 @@ fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
                 });
             };
 
+        if (node.getAttribute("rw")) |access_str| blk: {
+            const access = accessFromString(access_str) catch break :blk;
+            switch (access) {
+                .read_only, .write_only => try db.attrs.access.put(
+                    db.gpa,
+                    id,
+                    access,
+                ),
+                else => {},
+            }
+        }
+
         if (db.types.registers.getEntry(register_id)) |entry| {
             try entry.value_ptr.put(db.gpa, id, {});
         } else unreachable;
     }
+}
+
+fn accessFromString(str: []const u8) !Database.Access {
+    return if (std.mem.eql(u8, "RW", str))
+        .read_write
+    else if (std.mem.eql(u8, "R", str))
+        .read_only
+    else if (std.mem.eql(u8, "W", str))
+        .write_only
+    else
+        error.InvalidAccessStr;
 }
 
 fn loadEnum(
