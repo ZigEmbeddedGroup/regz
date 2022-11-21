@@ -91,6 +91,18 @@ fn populateType(
         try typ.put("version", .{ .String = version });
 
     if (db.types.peripherals.get(id)) |peripheral| {
+        var modes = json.ObjectMap.init(allocator);
+        {
+            var it = peripheral.modes.iterator();
+            while (it.next()) |entry| {
+                const child_id = entry.key_ptr.*;
+                const name = db.attrs.names.get(child_id) orelse continue;
+                var child_typ = json.ObjectMap.init(allocator);
+                try populateType(db, arena, child_id, &child_typ);
+                try modes.put(name, .{ .Object = child_typ });
+            }
+        }
+
         var registers = json.ObjectMap.init(allocator);
         {
             var it = peripheral.registers.iterator();
@@ -115,9 +127,25 @@ fn populateType(
             }
         }
 
-        try typ.put("registers", .{ .Object = registers });
-        try typ.put("register_groups", .{ .Object = register_groups });
+        if (modes.count() > 0)
+            try typ.put("modes", .{ .Object = modes });
+        if (registers.count() > 0)
+            try typ.put("registers", .{ .Object = registers });
+        if (register_groups.count() > 0)
+            try typ.put("register_groups", .{ .Object = register_groups });
     } else if (db.types.register_groups.get(id)) |register_group| {
+        var modes = json.ObjectMap.init(allocator);
+        {
+            var it = register_group.modes.iterator();
+            while (it.next()) |entry| {
+                const child_id = entry.key_ptr.*;
+                const name = db.attrs.names.get(child_id) orelse continue;
+                var child_typ = json.ObjectMap.init(allocator);
+                try populateType(db, arena, child_id, &child_typ);
+                try modes.put(name, .{ .Object = child_typ });
+            }
+        }
+
         var registers = json.ObjectMap.init(allocator);
         {
             var it = register_group.registers.iterator();
@@ -142,20 +170,41 @@ fn populateType(
             }
         }
 
-        try typ.put("registers", .{ .Object = registers });
-        try typ.put("register_group", .{ .Object = register_groups });
+        if (modes.count() > 0)
+            try typ.put("modes", .{ .Object = modes });
+        if (registers.count() > 0)
+            try typ.put("registers", .{ .Object = registers });
+        if (register_groups.count() > 0)
+            try typ.put("register_group", .{ .Object = register_groups });
     } else if (db.types.registers.get(id)) |register| {
-        var fields = json.ObjectMap.init(allocator);
-        var it = register.fields.iterator();
-        while (it.next()) |entry| {
-            const field_id = entry.key_ptr.*;
-            const name = db.attrs.names.get(field_id) orelse continue;
-            var child_typ = json.ObjectMap.init(allocator);
-            try populateType(db, arena, field_id, &child_typ);
-            try fields.put(name, .{ .Object = child_typ });
+        var modes = json.ObjectMap.init(allocator);
+        {
+            var it = register.modes.iterator();
+            while (it.next()) |entry| {
+                const child_id = entry.key_ptr.*;
+                const name = db.attrs.names.get(child_id) orelse continue;
+                var child_typ = json.ObjectMap.init(allocator);
+                try populateType(db, arena, child_id, &child_typ);
+                try modes.put(name, .{ .Object = child_typ });
+            }
         }
 
-        try typ.put("fields", .{ .Object = fields });
+        var fields = json.ObjectMap.init(allocator);
+        {
+            var it = register.fields.iterator();
+            while (it.next()) |entry| {
+                const field_id = entry.key_ptr.*;
+                const name = db.attrs.names.get(field_id) orelse continue;
+                var child_typ = json.ObjectMap.init(allocator);
+                try populateType(db, arena, field_id, &child_typ);
+                try fields.put(name, .{ .Object = child_typ });
+            }
+        }
+
+        if (modes.count() > 0)
+            try typ.put("modes", .{ .Object = modes });
+        if (fields.count() > 0)
+            try typ.put("fields", .{ .Object = fields });
     } else if (db.types.fields.get(id)) |field| {
         _ = field;
     } else if (db.types.enums.get(id)) |enumeration| {
@@ -163,7 +212,8 @@ fn populateType(
     } else if (db.types.enum_fields.get(id)) |enum_field| {
         _ = enum_field;
     } else if (db.types.modes.get(id)) |mode| {
-        _ = mode;
+        try typ.put("value", .{ .String = mode.value });
+        try typ.put("qualifier", .{ .String = mode.qualifier });
     }
 }
 
