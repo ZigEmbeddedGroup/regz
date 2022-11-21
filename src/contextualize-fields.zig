@@ -67,7 +67,7 @@ fn recursiveSearchAndPrint(
     context: ContextMap,
     node: xml.Node,
     writer: anytype,
-) RecursiveSearchAndPrintError(@TypeOf(writer))!void {
+) !void {
     assert(components.len != 0);
 
     var attr_map = std.StringHashMapUnmanaged([]const u8){};

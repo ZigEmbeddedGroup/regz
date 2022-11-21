@@ -14,6 +14,7 @@ const params = clap.parseParamsComptime(
     \\-h, --help                Display this help and exit
     \\-s, --schema <str>        Explicitly set schema type, one of: svd, atdf, json
     \\-o, --output_path <str>   Write to a file
+    \\-j, --json                Write output as JSON
     \\<str>...
     \\
 );
@@ -136,7 +137,14 @@ fn mainImpl() anyerror!void {
     else
         std.io.getStdOut().writer();
 
-    try db.toZig(writer);
+    if (res.args.json)
+        try db.jsonStringify(.{
+            .whitespace = .{ .indent = .{ .Space = 2 } },
+        }, writer)
+    else
+        try db.toZig(writer);
+
+    try writer.writeByte('\n');
 }
 
 fn readFn(ctx: ?*anyopaque, buffer: ?[*]u8, len: c_int) callconv(.C) c_int {

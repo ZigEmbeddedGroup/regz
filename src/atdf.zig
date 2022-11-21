@@ -22,6 +22,8 @@ pub fn loadIntoDb(db: *Database, doc: xml.Doc) !void {
     var device_it = root.iterate(&.{"devices"}, "device");
     while (device_it.next()) |entry|
         try loadDevice(db, entry);
+
+    db.assertValid();
 }
 
 fn loadDevice(db: *Database, node: xml.Node) !void {
@@ -70,6 +72,22 @@ fn loadDevice(db: *Database, node: xml.Node) !void {
     // property-groups.property-group.property
 }
 
+// TODO: instances use name in module
+fn getInlinedRegisterGroup(parent_node: xml.Node, parent_name: []const u8, name_key: [:0]const u8) ?xml.Node {
+    var register_group_it = parent_node.iterate(&.{}, "register-group");
+    const rg_node = register_group_it.next() orelse return null;
+    const rg_name = rg_node.getAttribute(name_key) orelse return null;
+    if (register_group_it.next() != null) {
+        std.log.debug("register group not alone", .{});
+        return null;
+    }
+
+    return if (std.mem.eql(u8, rg_name, parent_name))
+        rg_node
+    else
+        null;
+}
+
 // module instances are listed under atdf-tools-device-file.modules.
 fn loadModuleType(db: *Database, node: xml.Node) !void {
     validateAttrs(node, &.{
@@ -86,21 +104,48 @@ fn loadModuleType(db: *Database, node: xml.Node) !void {
 
     std.log.debug("{}: creating peripheral type", .{id});
     try db.types.peripherals.put(db.gpa, id, .{});
-    if (node.getAttribute("name")) |name|
-        try db.addName(id, name);
+    const name = node.getAttribute("name") orelse return error.ModuleTypeMissingName;
+    try db.addName(id, name);
 
     if (node.getAttribute("caption")) |caption|
         try db.addDescription(id, caption);
 
-    var register_group_it = node.iterate(&.{}, "register-group");
-    while (register_group_it.next()) |register_group_node|
-        try loadRegisterGroup(db, register_group_node, id);
+    // special case but the most common, if there is only one register
+    // group and it's name matches the peripheral, then inline the
+    // registers. This operation needs to be done in
+    // `loadModuleInstance()` as well
+    if (getInlinedRegisterGroup(node, name, "name")) |register_group_node| {
+        try loadRegisterGroupChildren(db, register_group_node, id);
+    } else {
+        var register_group_it = node.iterate(&.{}, "register-group");
+        while (register_group_it.next()) |register_group_node|
+            try loadRegisterGroup(db, register_group_node, id);
+    }
 
     var value_group_it = node.iterate(&.{}, "value-group");
     while (value_group_it.next()) |value_group_node|
         try loadEnum(db, value_group_node, id);
 
     // TODO: interrupt-group
+}
+
+fn loadRegisterGroupChildren(
+    db: *Database,
+    node: xml.Node,
+    dest_id: EntityId,
+) !void {
+    assert(db.entityIs("type.peripheral", dest_id) or
+        db.entityIs("type.register_group", dest_id));
+
+    var mode_it = node.iterate(&.{}, "mode");
+    while (mode_it.next()) |mode_node|
+        loadMode(db, mode_node, dest_id) catch |err| {
+            std.log.err("{}: failed to load mode: {}", .{ dest_id, err });
+        };
+
+    var register_it = node.iterate(&.{}, "register");
+    while (register_it.next()) |register_node|
+        try loadRegister(db, register_node, dest_id);
 }
 
 // loads a register group which is under a peripheral or under another
@@ -150,28 +195,20 @@ fn loadRegisterGroup(
     if (node.getAttribute("size")) |size|
         try db.addSize(id, try std.fmt.parseInt(u64, size, 0));
 
-    var mode_it = node.iterate(&.{}, "mode");
-    while (mode_it.next()) |mode_node|
-        loadMode(db, mode_node, id) catch |err| {
-            std.log.err("{}: failed to load mode: {}", .{ id, err });
-        };
-
-    var register_it = node.iterate(&.{}, "register");
-    while (register_it.next()) |register_node|
-        try loadRegister(db, register_node, id);
+    try loadRegisterGroupChildren(db, node, id);
 
     // TODO: register-group
-
     // connect with parent
     if (db.types.peripherals.getEntry(parent_id)) |entry| {
-        try entry.value_ptr.put(db.gpa, id, {});
+        try entry.value_ptr.register_groups.put(db.gpa, id, {});
     } else if (db.types.register_groups.getEntry(parent_id)) |entry| {
-        try entry.value_ptr.put(db.gpa, id, {});
+        try entry.value_ptr.register_groups.put(db.gpa, id, {});
     } else unreachable;
 }
 
 fn loadMode(db: *Database, node: xml.Node, parent_id: EntityId) !void {
-    assert(db.entityIs("type.register_group", parent_id) or
+    assert(db.entityIs("type.peripheral", parent_id) or
+        db.entityIs("type.register_group", parent_id) or
         db.entityIs("type.register", parent_id));
 
     validateAttrs(node, &.{
@@ -185,11 +222,10 @@ fn loadMode(db: *Database, node: xml.Node, parent_id: EntityId) !void {
     const id = db.createEntity();
     errdefer db.destroyEntity(id);
 
-    std.log.debug("{}: creating mode", .{id});
     const value_str = node.getAttribute("value") orelse return error.MissingModeValue;
     const qualifier = node.getAttribute("qualifier") orelse return error.MissingModeQualifier;
+    std.log.debug("{}: creating mode, value={s}, qualifier={s}", .{ id, value_str, qualifier });
     try db.types.modes.put(db.gpa, id, .{
-        .owner = parent_id,
         .value = try db.arena.allocator().dupe(u8, value_str),
         .qualifier = try db.arena.allocator().dupe(u8, qualifier),
     });
@@ -200,6 +236,13 @@ fn loadMode(db: *Database, node: xml.Node, parent_id: EntityId) !void {
         try db.addDescription(id, caption);
 
     // TODO: "mask": "optional",
+    if (db.types.peripherals.getEntry(parent_id)) |entry| {
+        try entry.value_ptr.modes.put(db.gpa, id, {});
+    } else if (db.types.register_groups.getEntry(parent_id)) |entry| {
+        try entry.value_ptr.modes.put(db.gpa, id, {});
+    } else if (db.types.registers.getEntry(parent_id)) |entry| {
+        try entry.value_ptr.modes.put(db.gpa, id, {});
+    } else unreachable;
 }
 
 // search for modes that the parent entity owns, and if the name matches,
@@ -214,11 +257,22 @@ fn assignModesToEntity(
     var modes = Database.Modes{};
     errdefer modes.deinit(db.gpa);
 
+    const modeset = if (db.types.peripherals.get(parent_id)) |peripheral|
+        peripheral.modes
+    else if (db.types.register_groups.get(parent_id)) |register_group|
+        register_group.modes
+    else if (db.types.registers.get(parent_id)) |register|
+        register.modes
+    else {
+        std.log.warn("{}: failed to find mode set", .{id});
+        return;
+    };
+
     var tok_it = std.mem.tokenize(u8, mode_names, " ");
     while (tok_it.next()) |mode_str| {
-        var it = db.types.modes.iterator();
-        while (it.next()) |entry| if (entry.value_ptr.owner == parent_id) {
-            if (db.attrs.names.get(entry.key_ptr.*)) |name|
+        var it = modeset.iterator();
+        while (it.next()) |mode_entry| {
+            if (db.attrs.names.get(mode_entry.key_ptr.*)) |name|
                 if (std.mem.eql(u8, name, mode_str)) {
                     std.log.debug("{}: assiged mode '{s}'", .{ id, name });
                     return;
@@ -235,7 +289,7 @@ fn assignModesToEntity(
                 });
 
             return error.MissingMode;
-        };
+        }
     }
 
     if (modes.count() > 0)
@@ -245,9 +299,10 @@ fn assignModesToEntity(
 fn loadRegister(
     db: *Database,
     node: xml.Node,
-    register_group_id: EntityId,
+    parent_id: EntityId,
 ) !void {
-    assert(db.entityIs("type.register_group", register_group_id));
+    assert(db.entityIs("type.register_group", parent_id) or
+        db.entityIs("type.peripheral", parent_id));
 
     validateAttrs(node, &.{
         "rw",
@@ -274,7 +329,7 @@ fn loadRegister(
     try db.types.registers.put(db.gpa, id, .{});
     try db.addName(id, name);
     if (node.getAttribute("modes")) |modes|
-        assignModesToEntity(db, id, register_group_id, modes) catch {
+        assignModesToEntity(db, id, parent_id, modes) catch {
             std.log.warn("failed to find mode '{s}' for register '{s}'", .{
                 modes,
                 name,
@@ -314,8 +369,10 @@ fn loadRegister(
     while (field_it.next()) |field_node|
         loadField(db, field_node, id) catch {};
 
-    if (db.types.register_groups.getEntry(register_group_id)) |entry| {
-        try entry.value_ptr.put(db.gpa, id, {});
+    if (db.types.peripherals.getEntry(parent_id)) |entry| {
+        try entry.value_ptr.registers.put(db.gpa, id, {});
+    } else if (db.types.register_groups.getEntry(parent_id)) |entry| {
+        try entry.value_ptr.registers.put(db.gpa, id, {});
     } else unreachable;
 }
 
@@ -390,7 +447,7 @@ fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
                 }
 
                 if (db.types.registers.getEntry(register_id)) |entry| {
-                    try entry.value_ptr.put(db.gpa, id, {});
+                    try entry.value_ptr.fields.put(db.gpa, id, {});
                 } else unreachable;
             }
         }
@@ -429,7 +486,7 @@ fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
         }
 
         if (db.types.registers.getEntry(register_id)) |entry| {
-            try entry.value_ptr.put(db.gpa, id, {});
+            try entry.value_ptr.fields.put(db.gpa, id, {});
         } else unreachable;
     }
 }
@@ -471,9 +528,10 @@ fn loadEnum(
     while (value_it.next()) |value_node|
         loadEnumField(db, value_node, id) catch {};
 
-    if (db.types.peripherals.getEntry(peripheral_id)) |entry| {
-        try entry.value_ptr.put(db.gpa, id, {});
-    } else unreachable;
+    // TODO: where do enums live?
+    //if (db.types.peripherals.getEntry(peripheral_id)) |entry| {
+    //    try entry.value_ptr.put(db.gpa, id, {});
+    //} else unreachable;
 }
 
 fn loadEnumField(
@@ -556,9 +614,15 @@ fn loadModuleInstance(db: *Database, node: xml.Node, peripheral_type_id: EntityI
     try db.instances.peripherals.put(db.gpa, id, .{ .type_id = peripheral_type_id });
     try db.addName(id, name);
 
-    var register_group_it = node.iterate(&.{}, "register-group");
-    while (register_group_it.next()) |register_group_node|
-        loadRegisterGroupInstance(db, register_group_node, id, peripheral_type_id) catch {};
+    if (getInlinedRegisterGroup(node, name, "name")) |register_group_node| {
+        const offset_str = register_group_node.getAttribute("offset") orelse return error.MissingPeripheralOffset;
+        const offset = try std.fmt.parseInt(u64, offset_str, 0);
+        try db.addOffset(id, offset);
+    } else {
+        var register_group_it = node.iterate(&.{}, "register-group");
+        while (register_group_it.next()) |register_group_node|
+            loadRegisterGroupInstance(db, register_group_node, id, peripheral_type_id) catch {};
+    }
 
     var signal_it = node.iterate(&.{"signals"}, "signal");
     while (signal_it.next()) |signal_node|
@@ -604,7 +668,7 @@ fn loadRegisterGroupInstance(
     };
 
     const type_id = blk: {
-        var type_it = db.types.peripherals.get(peripheral_type_id).?.iterator();
+        var type_it = db.types.peripherals.get(peripheral_type_id).?.register_groups.iterator();
         while (type_it.next()) |entry| {
             if (db.attrs.names.get(entry.key_ptr.*)) |entry_name|
                 if (std.mem.eql(u8, entry_name, name_in_module))

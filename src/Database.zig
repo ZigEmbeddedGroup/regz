@@ -11,10 +11,12 @@ const atdf = @import("atdf.zig");
 const dslite = @import("dslite.zig");
 const gen = @import("gen.zig");
 const regzon = @import("regzon.zig");
+
 const Database = @This();
 
 pub const EntityId = u32;
 pub const InterruptIndex = u32;
+pub const EntitySet = ArrayHashMap(EntityId, void);
 
 pub const Access = enum {
     read_only,
@@ -26,42 +28,76 @@ pub const Access = enum {
 pub const Interrupt = i32;
 
 /// an enum is a set of enum fields
-pub const Enum = ArrayHashMap(EntityId, void);
-
-/// a struct is a set of struct fields
-pub const Struct = ArrayHashMap(EntityId, void);
-
-/// a peripheral is a set of registers and register groups
-pub const Peripheral = ArrayHashMap(EntityId, void);
+pub const Enum = EntitySet;
 
 pub const Device = struct {
     properties: std.StringHashMapUnmanaged([]const u8) = .{},
-    interrupts: ArrayHashMap(EntityId, void) = .{},
+    interrupts: EntitySet = .{},
+
+    pub fn deinit(self: *Device, gpa: Allocator) void {
+        self.properties.deinit(gpa);
+        self.interrupts.deinit(gpa);
+    }
 };
 
-/// a peripheral instance has an associated peripheral type, and register and register group instances
-pub const PeripheralInstance = struct {
-    type_id: EntityId,
-    children: ArrayHashMap(EntityId, void) = .{},
+/// a peripheral is a set of registers and register groups
+pub const Peripheral = struct {
+    registers: EntitySet = .{},
+    register_groups: EntitySet = .{},
+    modes: EntitySet = .{},
+
+    pub fn deinit(self: *Peripheral, gpa: Allocator) void {
+        self.registers.deinit(gpa);
+        self.register_groups.deinit(gpa);
+        self.modes.deinit(gpa);
+    }
 };
 
 /// a register is a set of fields
-pub const Register = ArrayHashMap(EntityId, void);
+pub const Register = struct {
+    fields: EntitySet = .{},
+    modes: EntitySet = .{},
+
+    pub fn deinit(self: *Register, gpa: Allocator) void {
+        self.fields.deinit(gpa);
+        self.modes.deinit(gpa);
+    }
+};
 
 /// a register group is a set of registers and nested register groups
-pub const RegisterGroup = ArrayHashMap(EntityId, void);
+pub const RegisterGroup = struct {
+    registers: EntitySet = .{},
+    register_groups: EntitySet = .{},
+    modes: EntitySet = .{},
 
-/// Field offset is in `offsets` table, width is in `sizes` table
+    pub fn deinit(self: *RegisterGroup, gpa: Allocator) void {
+        self.registers.deinit(gpa);
+        self.register_groups.deinit(gpa);
+        self.modes.deinit(gpa);
+    }
+};
+
+/// Field offset is in `offsets` table, width is in `sizes` table. If it has modes
 pub const Field = void;
 
 pub const Mode = struct {
-    owner: EntityId,
     qualifier: []const u8,
     value: []const u8,
 };
 
 /// a collection of modes that applies to a register or bitfield
-pub const Modes = ArrayHashMap(EntityId, void);
+pub const Modes = EntitySet;
+
+/// a peripheral instance has an associated peripheral type, and register and register group instances
+pub const PeripheralInstance = struct {
+    type_id: EntityId,
+    // TODO: be more specific
+    children: EntitySet = .{},
+
+    pub fn deinit(self: *PeripheralInstance, gpa: Allocator) void {
+        self.children.deinit(gpa);
+    }
+};
 
 gpa: Allocator,
 arena: ArenaAllocator,
@@ -270,7 +306,7 @@ pub fn addDeviceProperty(
 }
 
 // TODO: assert that entity is only found in one table
-pub fn entityIs(db: *Database, comptime entity_location: []const u8, id: EntityId) bool {
+pub fn entityIs(db: Database, comptime entity_location: []const u8, id: EntityId) bool {
     comptime var it = std.mem.tokenize(u8, entity_location, ".");
     // the tables are in plural form but "type.peripheral" feels better to me
     // for calling this function
@@ -281,6 +317,26 @@ pub fn entityIs(db: *Database, comptime entity_location: []const u8, id: EntityI
     return @field(@field(db, group), table).contains(id);
 }
 
+// assert that the database is in valid state
+pub fn assertValid(db: Database) void {
+    // entity id's should only ever be the primary key in one of the type or
+    // instance maps.
+    var id: u32 = 0;
+    while (id < db.next_entity_id) : (id += 1) {
+        var count: u32 = 0;
+        inline for (.{ "types", "instances" }) |area| {
+            inline for (@typeInfo(@TypeOf(@field(db, area))).Struct.fields) |field| {
+                if (@field(@field(db, area), field.name).contains(id))
+                    count += 1;
+            }
+        }
+
+        assert(count <= 1); // entity id found in more than one place
+    }
+
+    // TODO: check for circular dependencies in relationships
+}
+
 /// stringify entire database to JSON, you choose what formatting options you
 /// want
 pub fn jsonStringify(
@@ -288,7 +344,7 @@ pub fn jsonStringify(
     opts: std.json.StringifyOptions,
     writer: anytype,
 ) !void {
-    const value_tree = try regzon.toJson(db);
+    var value_tree = try regzon.toJson(db);
     defer value_tree.deinit();
 
     try value_tree.root.jsonStringify(opts, writer);
