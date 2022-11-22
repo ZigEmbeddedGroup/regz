@@ -90,6 +90,15 @@ fn populateType(
     if (db.attrs.versions.get(id)) |version|
         try typ.put("version", .{ .String = version });
 
+    if (db.attrs.access.get(id)) |access| if (access != .read_write)
+        try typ.put("access", .{
+            .String = switch (access) {
+                .read_only => "read-only",
+                .write_only => "write-only",
+                else => unreachable,
+            },
+        });
+
     if (db.types.peripherals.get(id)) |peripheral| {
         var modes = json.ObjectMap.init(allocator);
         {

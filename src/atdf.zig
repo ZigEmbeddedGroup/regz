@@ -50,9 +50,8 @@ fn loadDevice(db: *Database, node: xml.Node) !void {
 
     var module_it = node.iterate(&.{"peripherals"}, "module");
     while (module_it.next()) |module_node|
-        loadModuleInstances(db, module_node) catch |err| switch (err) {
-            error.MissingPeripheralType => {},
-            else => return err,
+        loadModuleInstances(db, module_node) catch |err| {
+            std.log.warn("failed to instantiate module: {}", .{err});
         };
 
     var interrupt_it = node.iterate(&.{"interrupts"}, "interrupt");

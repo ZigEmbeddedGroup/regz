@@ -138,9 +138,7 @@ fn mainImpl() anyerror!void {
         std.io.getStdOut().writer();
 
     if (res.args.json)
-        try db.jsonStringify(.{
-            .whitespace = .{ .indent = .{ .Space = 2 } },
-        }, writer)
+        try db.jsonStringify(.{}, writer)
     else
         try db.toZig(writer);
 
