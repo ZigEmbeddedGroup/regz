@@ -45,11 +45,13 @@ pub const Peripheral = struct {
     registers: EntitySet = .{},
     register_groups: EntitySet = .{},
     modes: EntitySet = .{},
+    enums: EntitySet = .{},
 
     pub fn deinit(self: *Peripheral, gpa: Allocator) void {
         self.registers.deinit(gpa);
         self.register_groups.deinit(gpa);
         self.modes.deinit(gpa);
+        self.enums.deinit(gpa);
     }
 };
 
@@ -118,6 +120,9 @@ attrs: struct {
 
     // a register or bitfield can be valid in one or more modes of their parent
     modes: HashMap(EntityId, Modes) = .{},
+
+    // a field type might have an enum type
+    enums: HashMap(EntityId, EntityId) = .{},
 } = .{},
 
 types: struct {
@@ -126,7 +131,7 @@ types: struct {
     registers: ArrayHashMap(EntityId, Register) = .{},
     fields: ArrayHashMap(EntityId, Field) = .{},
     enums: ArrayHashMap(EntityId, Enum) = .{},
-    enum_fields: ArrayHashMap(EntityId, u64) = .{},
+    enum_fields: ArrayHashMap(EntityId, u32) = .{},
 
     // atdf has modes which make registers into unions
     modes: ArrayHashMap(EntityId, Mode) = .{},
@@ -162,6 +167,7 @@ pub fn deinit(db: *Database) void {
     db.attrs.reset_values.deinit(db.gpa);
     db.attrs.reset_masks.deinit(db.gpa);
     db.attrs.versions.deinit(db.gpa);
+    db.attrs.enums.deinit(db.gpa);
     db.attrs.modes.deinit(db.gpa);
 
     // types

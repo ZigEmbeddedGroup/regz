@@ -109,6 +109,10 @@ fn loadModuleType(db: *Database, node: xml.Node) !void {
     if (node.getAttribute("caption")) |caption|
         try db.addDescription(id, caption);
 
+    var value_group_it = node.iterate(&.{}, "value-group");
+    while (value_group_it.next()) |value_group_node|
+        try loadEnum(db, value_group_node, id);
+
     // special case but the most common, if there is only one register
     // group and it's name matches the peripheral, then inline the
     // registers. This operation needs to be done in
@@ -120,11 +124,6 @@ fn loadModuleType(db: *Database, node: xml.Node) !void {
         while (register_group_it.next()) |register_group_node|
             try loadRegisterGroup(db, register_group_node, id);
     }
-
-    var value_group_it = node.iterate(&.{}, "value-group");
-    while (value_group_it.next()) |value_group_node|
-        try loadEnum(db, value_group_node, id);
-
     // TODO: interrupt-group
 }
 
@@ -273,7 +272,7 @@ fn assignModesToEntity(
         while (it.next()) |mode_entry| {
             if (db.attrs.names.get(mode_entry.key_ptr.*)) |name|
                 if (std.mem.eql(u8, name, mode_str)) {
-                    std.log.debug("{}: assiged mode '{s}'", .{ id, name });
+                    std.log.debug("{}: assigned mode '{s}'", .{ id, name });
                     return;
                 };
         } else {
@@ -419,6 +418,7 @@ fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
                 errdefer db.destroyEntity(id);
 
                 std.log.debug("{}: creating field", .{id});
+                try db.types.fields.put(db.gpa, id, {});
                 try db.addName(id, field_name);
                 try db.addOffset(id, i);
                 try db.addSize(id, 1);
@@ -445,6 +445,7 @@ fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
                     }
                 }
 
+                // discontiguous fields like this don't get to have enums
                 if (db.types.registers.getEntry(register_id)) |entry| {
                     try entry.value_ptr.fields.put(db.gpa, id, {});
                 } else unreachable;
@@ -457,6 +458,7 @@ fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
         errdefer db.destroyEntity(id);
 
         std.log.debug("{}: creating field", .{id});
+        try db.types.fields.put(db.gpa, id, {});
         try db.addName(id, name);
         try db.addOffset(id, offset);
         try db.addSize(id, width);
@@ -482,6 +484,21 @@ fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
                 ),
                 else => {},
             }
+        }
+
+        // values _should_ match to a known enum
+        // TODO: namespace the enum to the appropriate register, register_group, or peripheral
+        if (node.getAttribute("values")) |values| {
+            var it = db.types.enums.iterator();
+            while (it.next()) |entry| {
+                const enum_id = entry.key_ptr.*;
+                const enum_name = db.attrs.names.get(enum_id) orelse continue;
+                if (std.mem.eql(u8, enum_name, values)) {
+                    std.log.debug("{}: assigned enum '{s}'", .{ id, enum_name });
+                    try db.attrs.enums.put(db.gpa, id, enum_id);
+                    break;
+                }
+            } else std.log.debug("{}: failed to find corresponding enum", .{id});
         }
 
         if (db.types.registers.getEntry(register_id)) |entry| {
@@ -527,10 +544,9 @@ fn loadEnum(
     while (value_it.next()) |value_node|
         loadEnumField(db, value_node, id) catch {};
 
-    // TODO: where do enums live?
-    //if (db.types.peripherals.getEntry(peripheral_id)) |entry| {
-    //    try entry.value_ptr.put(db.gpa, id, {});
-    //} else unreachable;
+    if (db.types.peripherals.getEntry(peripheral_id)) |entry| {
+        try entry.value_ptr.enums.put(db.gpa, id, {});
+    } else unreachable;
 }
 
 fn loadEnumField(
@@ -552,7 +568,7 @@ fn loadEnumField(
         return error.MissingEnumFieldValue;
     };
 
-    const value = std.fmt.parseInt(u64, value_str, 0) catch |err| {
+    const value = std.fmt.parseInt(u32, value_str, 0) catch |err| {
         std.log.warn("failed to parse enum value '{s}' of enum field '{s}'", .{
             value_str,
             name,
@@ -563,14 +579,14 @@ fn loadEnumField(
     const id = db.createEntity();
     errdefer db.destroyEntity(id);
 
-    std.log.debug("{}: creating enum field", .{id});
+    std.log.debug("{}: creating enum field with value: {}", .{ id, value });
     try db.addName(id, name);
     try db.types.enum_fields.put(db.gpa, id, value);
     if (node.getAttribute("caption")) |caption|
         try db.addDescription(id, caption);
 
     if (db.types.enums.getEntry(enum_id)) |entry| {
-        try entry.value_ptr.put(db.gpa, enum_id, {});
+        try entry.value_ptr.put(db.gpa, id, {});
     } else unreachable;
 }
 
@@ -612,7 +628,6 @@ fn loadModuleInstance(db: *Database, node: xml.Node, peripheral_type_id: EntityI
     const name = node.getAttribute("name") orelse return error.MissingInstanceName;
     try db.instances.peripherals.put(db.gpa, id, .{ .type_id = peripheral_type_id });
     try db.addName(id, name);
-
     if (getInlinedRegisterGroup(node, name, "name")) |register_group_node| {
         const offset_str = register_group_node.getAttribute("offset") orelse return error.MissingPeripheralOffset;
         const offset = try std.fmt.parseInt(u64, offset_str, 0);
@@ -640,7 +655,6 @@ fn loadRegisterGroupInstance(
 ) !void {
     assert(db.entityIs("instance.peripheral", peripheral_id));
     assert(db.entityIs("type.peripheral", peripheral_type_id));
-
     validateAttrs(node, &.{
         "name",
         "address-space",
@@ -702,7 +716,6 @@ fn loadRegisterGroupInstance(
 
 fn loadSignal(db: *Database, node: xml.Node, peripheral_id: EntityId) !void {
     assert(db.entityIs("instance.peripheral", peripheral_id));
-
     validateAttrs(node, &.{
         "group",
         "index",
@@ -718,7 +731,6 @@ fn loadSignal(db: *Database, node: xml.Node, peripheral_id: EntityId) !void {
 // TODO: there are fields like irq-index
 fn loadInterrupt(db: *Database, node: xml.Node, device_id: EntityId) !void {
     assert(db.entityIs("instance.device", device_id));
-
     validateAttrs(node, &.{
         "index",
         "name",
