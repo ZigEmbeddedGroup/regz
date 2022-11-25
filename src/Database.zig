@@ -125,7 +125,7 @@ pub fn deinit(db: *Database) void {
     db.attrs.reset_masks.deinit(db.gpa);
     db.attrs.versions.deinit(db.gpa);
     db.attrs.enums.deinit(db.gpa);
-    db.attrs.modes.deinit(db.gpa);
+    deinitMapAndValues(db.gpa, &db.attrs.modes);
 
     // children
     deinitMapAndValues(db.gpa, &db.children.interrupts);

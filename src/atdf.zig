@@ -256,8 +256,14 @@ fn assignModesToEntity(
     while (tok_it.next()) |mode_str| {
         var it = modeset.iterator();
         while (it.next()) |mode_entry| {
-            if (db.attrs.names.get(mode_entry.key_ptr.*)) |name|
+            const mode_id = mode_entry.key_ptr.*;
+            if (db.attrs.names.get(mode_id)) |name|
                 if (std.mem.eql(u8, name, mode_str)) {
+                    const result = try db.attrs.modes.getOrPut(db.gpa, id);
+                    if (!result.found_existing)
+                        result.value_ptr.* = .{};
+
+                    try result.value_ptr.put(db.gpa, mode_id, {});
                     std.log.debug("{}: assigned mode '{s}'", .{ id, name });
                     return;
                 };
@@ -754,4 +760,73 @@ fn validateAttrs(node: xml.Node, attrs: []const []const u8) void {
             std.mem.span(node.impl.name),
         });
     }
+}
+
+const expect = std.testing.expect;
+const expectEqual = std.testing.expectEqual;
+const expectEqualStrings = std.testing.expectEqualStrings;
+
+test "register with mode" {
+    const text =
+        \\<avr-tools-device-file>
+        \\  <modules>
+        \\    <module caption="16-bit Timer/Counter Type A" id="I2117" name="TCA">
+        \\      <register-group caption="16-bit Timer/Counter Type A" name="TCA" size="0x40">
+        \\        <mode caption="Single Mode"
+        \\              name="SINGLE"
+        \\              qualifier="TCA.SINGLE.CTRLD.SPLITM"
+        \\              value="0"/>
+        \\        <mode caption="Split Mode"
+        \\              name="SPLIT"
+        \\              qualifier="TCA.SPLIT.CTRLD.SPLITM"
+        \\              value="1"/>
+        \\        <register caption="Control A"
+        \\                  initval="0x00"
+        \\                  modes="SINGLE"
+        \\                  name="CTRLA"
+        \\                  offset="0x00"
+        \\                  rw="RW"
+        \\                  size="1"/>
+        \\      </register-group>
+        \\    </module>
+        \\  </modules>
+        \\</avr-tools-device-file>
+        \\
+    ;
+
+    var doc = try xml.Doc.fromMemory(text);
+    var db = try Database.initFromAtdf(std.testing.allocator, doc);
+    defer db.deinit();
+
+    // there will only be one register
+    try expectEqual(@as(usize, 1), db.types.registers.count());
+    const register_id = blk: {
+        var it = db.types.registers.iterator();
+        break :blk it.next().?.key_ptr.*;
+    };
+
+    // the register will have one associated mode
+    try expect(db.attrs.modes.contains(register_id));
+    const modeset = db.attrs.modes.get(register_id).?;
+    try expectEqual(@as(usize, 1), modeset.count());
+    const mode_id = blk: {
+        var it = modeset.iterator();
+        break :blk it.next().?.key_ptr.*;
+    };
+
+    // the name of the mode is 'SINGLE'
+    try expect(db.attrs.names.contains(register_id));
+    const mode_name = db.attrs.names.get(mode_id).?;
+    try expectEqualStrings("SINGLE", mode_name);
+
+    // the register group should be flattened, so the mode should be a child of
+    // the peripheral
+    try expectEqual(@as(usize, 1), db.types.peripherals.count());
+    const peripheral_id = blk: {
+        var it = db.types.peripherals.iterator();
+        break :blk it.next().?.key_ptr.*;
+    };
+    try expect(db.children.modes.contains(peripheral_id));
+    const peripheral_modes = db.children.modes.get(peripheral_id).?;
+    try expect(peripheral_modes.contains(mode_id));
 }

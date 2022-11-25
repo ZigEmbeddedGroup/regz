@@ -125,7 +125,7 @@ pub const Doc = struct {
                 null,
                 null,
                 0,
-            ) orelse error.XmlReadMemory,
+            ) orelse return error.XmlReadMemory,
         };
     }
 
