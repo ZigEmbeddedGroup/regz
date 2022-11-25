@@ -69,27 +69,26 @@ fn populateType(
     typ: *json.ObjectMap,
 ) !void {
     const allocator = arena.allocator();
-    var attrs = json.ObjectMap.init(allocator);
     if (db.attrs.descriptions.get(id)) |description|
-        try attrs.put("description", .{ .String = description });
+        try typ.put("description", .{ .String = description });
 
     if (db.attrs.offsets.get(id)) |offset|
-        try attrs.put("offset", .{ .Integer = @intCast(i64, offset) });
+        try typ.put("offset", .{ .Integer = @intCast(i64, offset) });
 
     if (db.attrs.sizes.get(id)) |size|
-        try attrs.put("size", .{ .Integer = @intCast(i64, size) });
+        try typ.put("size", .{ .Integer = @intCast(i64, size) });
 
     if (db.attrs.reset_values.get(id)) |reset_value|
-        try attrs.put("reset_value", .{ .Integer = @intCast(i64, reset_value) });
+        try typ.put("reset_value", .{ .Integer = @intCast(i64, reset_value) });
 
     if (db.attrs.reset_masks.get(id)) |reset_mask|
-        try attrs.put("reset_mask", .{ .Integer = @intCast(i64, reset_mask) });
+        try typ.put("reset_mask", .{ .Integer = @intCast(i64, reset_mask) });
 
     if (db.attrs.versions.get(id)) |version|
-        try attrs.put("version", .{ .String = version });
+        try typ.put("version", .{ .String = version });
 
     if (db.attrs.access.get(id)) |access| if (access != .read_write)
-        try attrs.put("access", .{
+        try typ.put("access", .{
             .String = switch (access) {
                 .read_only => "read-only",
                 .write_only => "write-only",
@@ -97,11 +96,27 @@ fn populateType(
             },
         });
 
+    if (db.attrs.enums.get(id)) |enum_id|
+        if (db.attrs.names.get(enum_id)) |enum_name|
+            try typ.put("enum", .{ .String = enum_name });
+
+    if (db.attrs.modes.get(id)) |modeset| {
+        var modearray = json.Array.init(allocator);
+
+        var it = modeset.iterator();
+        while (it.next()) |entry|
+            if (db.attrs.names.get(entry.key_ptr.*)) |mode_name|
+                try modearray.append(.{ .String = mode_name });
+
+        if (modearray.items.len > 0)
+            try typ.put("modes", .{ .Array = modearray });
+    }
+
     if (db.types.enum_fields.get(id)) |enum_field| {
-        try attrs.put("value", .{ .Integer = enum_field });
+        try typ.put("value", .{ .Integer = enum_field });
     } else if (db.types.modes.get(id)) |mode| {
-        try attrs.put("value", .{ .String = mode.value });
-        try attrs.put("qualifier", .{ .String = mode.qualifier });
+        try typ.put("value", .{ .String = mode.value });
+        try typ.put("qualifier", .{ .String = mode.qualifier });
     }
 
     var children = json.ObjectMap.init(allocator);
@@ -124,8 +139,6 @@ fn populateType(
             try children.put(field.name, .{ .Object = obj });
     }
 
-    if (attrs.count() > 0)
-        try typ.put("attrs", .{ .Object = attrs });
     if (children.count() > 0)
         try typ.put("children", .{ .Object = children });
 }
