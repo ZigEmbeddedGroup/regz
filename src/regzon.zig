@@ -69,26 +69,27 @@ fn populateType(
     typ: *json.ObjectMap,
 ) !void {
     const allocator = arena.allocator();
+    var attrs = json.ObjectMap.init(allocator);
     if (db.attrs.descriptions.get(id)) |description|
-        try typ.put("description", .{ .String = description });
+        try attrs.put("description", .{ .String = description });
 
     if (db.attrs.offsets.get(id)) |offset|
-        try typ.put("offset", .{ .Integer = @intCast(i64, offset) });
+        try attrs.put("offset", .{ .Integer = @intCast(i64, offset) });
 
     if (db.attrs.sizes.get(id)) |size|
-        try typ.put("size", .{ .Integer = @intCast(i64, size) });
+        try attrs.put("size", .{ .Integer = @intCast(i64, size) });
 
     if (db.attrs.reset_values.get(id)) |reset_value|
-        try typ.put("reset_value", .{ .Integer = @intCast(i64, reset_value) });
+        try attrs.put("reset_value", .{ .Integer = @intCast(i64, reset_value) });
 
     if (db.attrs.reset_masks.get(id)) |reset_mask|
-        try typ.put("reset_mask", .{ .Integer = @intCast(i64, reset_mask) });
+        try attrs.put("reset_mask", .{ .Integer = @intCast(i64, reset_mask) });
 
     if (db.attrs.versions.get(id)) |version|
-        try typ.put("version", .{ .String = version });
+        try attrs.put("version", .{ .String = version });
 
     if (db.attrs.access.get(id)) |access| if (access != .read_write)
-        try typ.put("access", .{
+        try attrs.put("access", .{
             .String = switch (access) {
                 .read_only => "read-only",
                 .write_only => "write-only",
@@ -96,188 +97,37 @@ fn populateType(
             },
         });
 
-    if (db.types.peripherals.get(id)) |peripheral| {
-        var modes = json.ObjectMap.init(allocator);
-        {
-            var it = peripheral.modes.iterator();
-            while (it.next()) |entry| {
-                const child_id = entry.key_ptr.*;
-                const name = db.attrs.names.get(child_id) orelse continue;
-                var child_typ = json.ObjectMap.init(allocator);
-                try populateType(db, arena, child_id, &child_typ);
-                try modes.put(name, .{ .Object = child_typ });
-            }
-        }
-
-        var enums = json.ObjectMap.init(allocator);
-        {
-            var it = peripheral.enums.iterator();
-            while (it.next()) |entry| {
-                const child_id = entry.key_ptr.*;
-                const name = db.attrs.names.get(child_id) orelse continue;
-                var child_typ = json.ObjectMap.init(allocator);
-                try populateType(db, arena, child_id, &child_typ);
-                try enums.put(name, .{ .Object = child_typ });
-            }
-        }
-
-        var registers = json.ObjectMap.init(allocator);
-        {
-            var it = peripheral.registers.iterator();
-            while (it.next()) |entry| {
-                const child_id = entry.key_ptr.*;
-                const name = db.attrs.names.get(child_id) orelse continue;
-                var child_typ = json.ObjectMap.init(allocator);
-                try populateType(db, arena, child_id, &child_typ);
-                try registers.put(name, .{ .Object = child_typ });
-            }
-        }
-
-        var register_groups = json.ObjectMap.init(allocator);
-        {
-            var it = peripheral.register_groups.iterator();
-            while (it.next()) |entry| {
-                const child_id = entry.key_ptr.*;
-                const name = db.attrs.names.get(child_id) orelse continue;
-                var child_typ = json.ObjectMap.init(allocator);
-                try populateType(db, arena, child_id, &child_typ);
-                try registers.put(name, .{ .Object = child_typ });
-            }
-        }
-
-        if (modes.count() > 0)
-            try typ.put("modes", .{ .Object = modes });
-        if (enums.count() > 0)
-            try typ.put("enums", .{ .Object = enums });
-        if (registers.count() > 0)
-            try typ.put("registers", .{ .Object = registers });
-        if (register_groups.count() > 0)
-            try typ.put("register_groups", .{ .Object = register_groups });
-    } else if (db.types.register_groups.get(id)) |register_group| {
-        var modes = json.ObjectMap.init(allocator);
-        {
-            var it = register_group.modes.iterator();
-            while (it.next()) |entry| {
-                const child_id = entry.key_ptr.*;
-                const name = db.attrs.names.get(child_id) orelse continue;
-                var child_typ = json.ObjectMap.init(allocator);
-                try populateType(db, arena, child_id, &child_typ);
-                try modes.put(name, .{ .Object = child_typ });
-            }
-        }
-
-        var registers = json.ObjectMap.init(allocator);
-        {
-            var it = register_group.registers.iterator();
-            while (it.next()) |entry| {
-                const child_id = entry.key_ptr.*;
-                const name = db.attrs.names.get(child_id) orelse continue;
-                var child_typ = json.ObjectMap.init(allocator);
-                try populateType(db, arena, child_id, &child_typ);
-                try registers.put(name, .{ .Object = child_typ });
-            }
-        }
-
-        var register_groups = json.ObjectMap.init(allocator);
-        {
-            var it = register_group.register_groups.iterator();
-            while (it.next()) |entry| {
-                const child_id = entry.key_ptr.*;
-                const name = db.attrs.names.get(child_id) orelse continue;
-                var child_typ = json.ObjectMap.init(allocator);
-                try populateType(db, arena, child_id, &child_typ);
-                try registers.put(name, .{ .Object = child_typ });
-            }
-        }
-
-        if (modes.count() > 0)
-            try typ.put("modes", .{ .Object = modes });
-        if (registers.count() > 0)
-            try typ.put("registers", .{ .Object = registers });
-        if (register_groups.count() > 0)
-            try typ.put("register_group", .{ .Object = register_groups });
-    } else if (db.types.registers.get(id)) |register| {
-        var modes = json.ObjectMap.init(allocator);
-        {
-            var it = register.modes.iterator();
-            while (it.next()) |entry| {
-                const child_id = entry.key_ptr.*;
-                const name = db.attrs.names.get(child_id) orelse continue;
-                var child_typ = json.ObjectMap.init(allocator);
-                try populateType(db, arena, child_id, &child_typ);
-                try modes.put(name, .{ .Object = child_typ });
-            }
-        }
-
-        var fields = json.ObjectMap.init(allocator);
-        {
-            var it = register.fields.iterator();
-            while (it.next()) |entry| {
-                const field_id = entry.key_ptr.*;
-                assert(db.entityIs("type.field", field_id));
-                const name = db.attrs.names.get(field_id) orelse continue;
-                var child_typ = json.ObjectMap.init(allocator);
-                try populateType(db, arena, field_id, &child_typ);
-                try fields.put(name, .{ .Object = child_typ });
-            }
-        }
-
-        // A register should either have modes, or be active in one of the
-        // register group's modes. `modes` will then either be an object or an
-        // array respectively
-        // TODO: make it less crufty, find better names
-        if (modes.count() > 0) {
-            try typ.put("modes", .{ .Object = modes });
-        } else if (db.attrs.modes.get(id)) |modeset| {
-            var array = json.Array.init(allocator);
-            var mode_it = modeset.iterator();
-            while (mode_it.next()) |entry| {
-                const mode_id = entry.key_ptr.*;
-                const mode_name = db.attrs.names.get(mode_id) orelse continue;
-                try array.append(.{ .String = mode_name });
-            }
-
-            try typ.put("modes", .{ .Array = array });
-        }
-
-        if (fields.count() > 0)
-            try typ.put("fields", .{ .Object = fields });
-    } else if (db.types.fields.get(id)) |field| {
-        std.log.debug("looking at field: {}", .{field});
-        if (db.attrs.enums.get(id)) |enum_id|
-            if (db.attrs.names.get(enum_id)) |enum_name|
-                try typ.put("enum", .{ .String = enum_name });
-
-        if (db.attrs.modes.get(id)) |modes| {
-            var array = json.Array.init(allocator);
-            var mode_it = modes.iterator();
-            while (mode_it.next()) |entry| {
-                const mode_id = entry.key_ptr.*;
-                const mode_name = db.attrs.names.get(mode_id) orelse continue;
-                try array.append(.{ .String = mode_name });
-            }
-
-            try typ.put("modes", .{ .Array = array });
-        }
-    } else if (db.types.enums.get(id)) |enumeration| {
-        var fields = json.ObjectMap.init(allocator);
-        var field_it = enumeration.iterator();
-        while (field_it.next()) |entry| {
-            const field_id = entry.key_ptr.*;
-            assert(db.entityIs("type.enum_field", field_id));
-            const name = db.attrs.names.get(field_id) orelse continue;
-            var child_typ = json.ObjectMap.init(allocator);
-            try populateType(db, arena, field_id, &child_typ);
-            try fields.put(name, .{ .Object = child_typ });
-        }
-        if (fields.count() > 0)
-            try typ.put("fields", .{ .Object = fields });
-    } else if (db.types.enum_fields.get(id)) |enum_field| {
-        try typ.put("value", .{ .Integer = enum_field });
+    if (db.types.enum_fields.get(id)) |enum_field| {
+        try attrs.put("value", .{ .Integer = enum_field });
     } else if (db.types.modes.get(id)) |mode| {
-        try typ.put("value", .{ .String = mode.value });
-        try typ.put("qualifier", .{ .String = mode.qualifier });
+        try attrs.put("value", .{ .String = mode.value });
+        try attrs.put("qualifier", .{ .String = mode.qualifier });
     }
+
+    var children = json.ObjectMap.init(allocator);
+    inline for (@typeInfo(@TypeOf(db.children)).Struct.fields) |field| {
+        var obj = json.ObjectMap.init(allocator);
+
+        if (@field(db.children, field.name).get(id)) |set| {
+            assert(set.count() > 0);
+            var it = set.iterator();
+            while (it.next()) |entry| {
+                const child_id = entry.key_ptr.*;
+                const name = db.attrs.names.get(child_id) orelse continue;
+                var child_type = json.ObjectMap.init(allocator);
+                try populateType(db, arena, child_id, &child_type);
+                try obj.put(name, .{ .Object = child_type });
+            }
+        }
+
+        if (obj.count() > 0)
+            try children.put(field.name, .{ .Object = obj });
+    }
+
+    if (attrs.count() > 0)
+        try typ.put("attrs", .{ .Object = attrs });
+    if (children.count() > 0)
+        try typ.put("children", .{ .Object = children });
 }
 
 fn populateDevice(
@@ -297,9 +147,12 @@ fn populateDevice(
         try properties.put(entry.key_ptr.*, .{ .String = entry.value_ptr.* });
 
     var interrupts = json.ObjectMap.init(allocator);
-    var interrupt_it = db.instances.devices.get(id).?.interrupts.iterator();
-    while (interrupt_it.next()) |entry|
-        try populateInterrupt(db, arena, &interrupts, entry.key_ptr.*);
+    populate_interrupts: {
+        var interrupt_it = (db.children.interrupts.get(id) orelse
+            break :populate_interrupts).iterator();
+        while (interrupt_it.next()) |entry|
+            try populateInterrupt(db, arena, &interrupts, entry.key_ptr.*);
+    }
 
     // TODO: link peripherals to device
     var peripherals = json.ObjectMap.init(allocator);
@@ -372,11 +225,7 @@ fn populatePeripheral(
         try peripheral.put("type", .{ .String = type_name });
     }
 
-    var child_it = instance.children.iterator();
-    while (child_it.next()) |entry| {
-        const child_id = entry.key_ptr.*;
-        _ = child_id;
-    }
+    // TODO: peripheral instance children
 
     try peripherals.put(name, .{ .Object = peripheral });
 }

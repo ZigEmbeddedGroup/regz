@@ -102,7 +102,7 @@ fn loadModuleType(db: *Database, node: xml.Node) !void {
     errdefer db.destroyEntity(id);
 
     std.log.debug("{}: creating peripheral type", .{id});
-    try db.types.peripherals.put(db.gpa, id, .{});
+    try db.types.peripherals.put(db.gpa, id, {});
     const name = node.getAttribute("name") orelse return error.ModuleTypeMissingName;
     try db.addName(id, name);
 
@@ -183,7 +183,7 @@ fn loadRegisterGroup(
     errdefer db.destroyEntity(id);
 
     std.log.debug("{}: creating register group", .{id});
-    try db.types.register_groups.put(db.gpa, id, .{});
+    try db.types.register_groups.put(db.gpa, id, {});
     if (node.getAttribute("name")) |name|
         try db.addName(id, name);
 
@@ -197,11 +197,7 @@ fn loadRegisterGroup(
 
     // TODO: register-group
     // connect with parent
-    if (db.types.peripherals.getEntry(parent_id)) |entry| {
-        try entry.value_ptr.register_groups.put(db.gpa, id, {});
-    } else if (db.types.register_groups.getEntry(parent_id)) |entry| {
-        try entry.value_ptr.register_groups.put(db.gpa, id, {});
-    } else unreachable;
+    try db.addChild("type.register_group", parent_id, id);
 }
 
 fn loadMode(db: *Database, node: xml.Node, parent_id: EntityId) !void {
@@ -233,14 +229,8 @@ fn loadMode(db: *Database, node: xml.Node, parent_id: EntityId) !void {
     if (node.getAttribute("caption")) |caption|
         try db.addDescription(id, caption);
 
+    try db.addChild("type.mode", parent_id, id);
     // TODO: "mask": "optional",
-    if (db.types.peripherals.getEntry(parent_id)) |entry| {
-        try entry.value_ptr.modes.put(db.gpa, id, {});
-    } else if (db.types.register_groups.getEntry(parent_id)) |entry| {
-        try entry.value_ptr.modes.put(db.gpa, id, {});
-    } else if (db.types.registers.getEntry(parent_id)) |entry| {
-        try entry.value_ptr.modes.put(db.gpa, id, {});
-    } else unreachable;
 }
 
 // search for modes that the parent entity owns, and if the name matches,
@@ -255,12 +245,8 @@ fn assignModesToEntity(
     var modes = Database.Modes{};
     errdefer modes.deinit(db.gpa);
 
-    const modeset = if (db.types.peripherals.get(parent_id)) |peripheral|
-        peripheral.modes
-    else if (db.types.register_groups.get(parent_id)) |register_group|
-        register_group.modes
-    else if (db.types.registers.get(parent_id)) |register|
-        register.modes
+    const modeset = if (db.children.modes.get(parent_id)) |modeset|
+        modeset
     else {
         std.log.warn("{}: failed to find mode set", .{id});
         return;
@@ -324,7 +310,7 @@ fn loadRegister(
 
     std.log.debug("{}: creating register", .{id});
     const name = node.getAttribute("name") orelse return error.MissingRegisterName;
-    try db.types.registers.put(db.gpa, id, .{});
+    try db.types.registers.put(db.gpa, id, {});
     try db.addName(id, name);
     if (node.getAttribute("modes")) |modes|
         assignModesToEntity(db, id, parent_id, modes) catch {
@@ -367,11 +353,7 @@ fn loadRegister(
     while (field_it.next()) |field_node|
         loadField(db, field_node, id) catch {};
 
-    if (db.types.peripherals.getEntry(parent_id)) |entry| {
-        try entry.value_ptr.registers.put(db.gpa, id, {});
-    } else if (db.types.register_groups.getEntry(parent_id)) |entry| {
-        try entry.value_ptr.registers.put(db.gpa, id, {});
-    } else unreachable;
+    try db.addChild("type.register", parent_id, id);
 }
 
 fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
@@ -446,9 +428,7 @@ fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
                 }
 
                 // discontiguous fields like this don't get to have enums
-                if (db.types.registers.getEntry(register_id)) |entry| {
-                    try entry.value_ptr.fields.put(db.gpa, id, {});
-                } else unreachable;
+                try db.addChild("type.field", register_id, id);
             }
         }
     } else {
@@ -501,9 +481,7 @@ fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
             } else std.log.debug("{}: failed to find corresponding enum", .{id});
         }
 
-        if (db.types.registers.getEntry(register_id)) |entry| {
-            try entry.value_ptr.fields.put(db.gpa, id, {});
-        } else unreachable;
+        try db.addChild("type.field", register_id, id);
     }
 }
 
@@ -535,7 +513,7 @@ fn loadEnum(
 
     std.log.debug("{}: creating enum", .{id});
     const name = node.getAttribute("name") orelse return error.MissingEnumName;
-    try db.types.enums.put(db.gpa, id, .{});
+    try db.types.enums.put(db.gpa, id, {});
     try db.addName(id, name);
     if (node.getAttribute("caption")) |caption|
         try db.addDescription(id, caption);
@@ -544,9 +522,7 @@ fn loadEnum(
     while (value_it.next()) |value_node|
         loadEnumField(db, value_node, id) catch {};
 
-    if (db.types.peripherals.getEntry(peripheral_id)) |entry| {
-        try entry.value_ptr.enums.put(db.gpa, id, {});
-    } else unreachable;
+    try db.addChild("type.enum", peripheral_id, id);
 }
 
 fn loadEnumField(
@@ -585,9 +561,7 @@ fn loadEnumField(
     if (node.getAttribute("caption")) |caption|
         try db.addDescription(id, caption);
 
-    if (db.types.enums.getEntry(enum_id)) |entry| {
-        try entry.value_ptr.put(db.gpa, id, {});
-    } else unreachable;
+    try db.addChild("type.enum_field", enum_id, id);
 }
 
 // module instances are listed under atdf-tools-device-file.devices.device.peripherals
@@ -681,7 +655,9 @@ fn loadRegisterGroupInstance(
     };
 
     const type_id = blk: {
-        var type_it = db.types.peripherals.get(peripheral_type_id).?.register_groups.iterator();
+        var type_it = (db.children.register_groups.get(peripheral_type_id) orelse
+            return error.MissingRegisterGroupType).iterator();
+
         while (type_it.next()) |entry| {
             if (db.attrs.names.get(entry.key_ptr.*)) |entry_name|
                 if (std.mem.eql(u8, entry_name, name_in_module))
@@ -704,9 +680,7 @@ fn loadRegisterGroupInstance(
         try db.addOffset(id, offset);
     }
 
-    if (db.instances.peripherals.getEntry(peripheral_id)) |entry| {
-        try entry.value_ptr.children.put(db.gpa, id, {});
-    } else unreachable;
+    try db.addChild("instance.register_group", peripheral_id, id);
 
     // TODO:
     // "address-space": "optional",
@@ -763,10 +737,7 @@ fn loadInterrupt(db: *Database, node: xml.Node, device_id: EntityId) !void {
     if (node.getAttribute("caption")) |caption|
         try db.addDescription(id, caption);
 
-    if (db.instances.devices.getEntry(device_id)) |entry|
-        try entry.value_ptr.interrupts.put(db.gpa, id, {})
-    else
-        unreachable;
+    try db.addChild("instance.interrupt", device_id, id);
 }
 
 // for now just emit warning logs when the input has attributes that it shouldn't have

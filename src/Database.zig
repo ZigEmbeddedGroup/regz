@@ -27,60 +27,13 @@ pub const Access = enum {
 /// an interrupt has a numeric index
 pub const Interrupt = i32;
 
-/// an enum is a set of enum fields
-pub const Enum = EntitySet;
-
 pub const Device = struct {
     properties: std.StringHashMapUnmanaged([]const u8) = .{},
-    interrupts: EntitySet = .{},
 
     pub fn deinit(self: *Device, gpa: Allocator) void {
         self.properties.deinit(gpa);
-        self.interrupts.deinit(gpa);
     }
 };
-
-/// a peripheral is a set of registers and register groups
-pub const Peripheral = struct {
-    registers: EntitySet = .{},
-    register_groups: EntitySet = .{},
-    modes: EntitySet = .{},
-    enums: EntitySet = .{},
-
-    pub fn deinit(self: *Peripheral, gpa: Allocator) void {
-        self.registers.deinit(gpa);
-        self.register_groups.deinit(gpa);
-        self.modes.deinit(gpa);
-        self.enums.deinit(gpa);
-    }
-};
-
-/// a register is a set of fields
-pub const Register = struct {
-    fields: EntitySet = .{},
-    modes: EntitySet = .{},
-
-    pub fn deinit(self: *Register, gpa: Allocator) void {
-        self.fields.deinit(gpa);
-        self.modes.deinit(gpa);
-    }
-};
-
-/// a register group is a set of registers and nested register groups
-pub const RegisterGroup = struct {
-    registers: EntitySet = .{},
-    register_groups: EntitySet = .{},
-    modes: EntitySet = .{},
-
-    pub fn deinit(self: *RegisterGroup, gpa: Allocator) void {
-        self.registers.deinit(gpa);
-        self.register_groups.deinit(gpa);
-        self.modes.deinit(gpa);
-    }
-};
-
-/// Field offset is in `offsets` table, width is in `sizes` table. If it has modes
-pub const Field = void;
 
 pub const Mode = struct {
     qualifier: []const u8,
@@ -93,12 +46,6 @@ pub const Modes = EntitySet;
 /// a peripheral instance has an associated peripheral type, and register and register group instances
 pub const PeripheralInstance = struct {
     type_id: EntityId,
-    // TODO: be more specific
-    children: EntitySet = .{},
-
-    pub fn deinit(self: *PeripheralInstance, gpa: Allocator) void {
-        self.children.deinit(gpa);
-    }
 };
 
 gpa: Allocator,
@@ -125,12 +72,22 @@ attrs: struct {
     enums: HashMap(EntityId, EntityId) = .{},
 } = .{},
 
+children: struct {
+    interrupts: ArrayHashMap(EntityId, EntitySet) = .{},
+    register_groups: ArrayHashMap(EntityId, EntitySet) = .{},
+    registers: ArrayHashMap(EntityId, EntitySet) = .{},
+    fields: ArrayHashMap(EntityId, EntitySet) = .{},
+    enums: ArrayHashMap(EntityId, EntitySet) = .{},
+    enum_fields: ArrayHashMap(EntityId, EntitySet) = .{},
+    modes: ArrayHashMap(EntityId, EntitySet) = .{},
+} = .{},
+
 types: struct {
-    peripherals: ArrayHashMap(EntityId, Peripheral) = .{},
-    register_groups: ArrayHashMap(EntityId, RegisterGroup) = .{},
-    registers: ArrayHashMap(EntityId, Register) = .{},
-    fields: ArrayHashMap(EntityId, Field) = .{},
-    enums: ArrayHashMap(EntityId, Enum) = .{},
+    peripherals: ArrayHashMap(EntityId, void) = .{},
+    register_groups: ArrayHashMap(EntityId, void) = .{},
+    registers: ArrayHashMap(EntityId, void) = .{},
+    fields: ArrayHashMap(EntityId, void) = .{},
+    enums: ArrayHashMap(EntityId, void) = .{},
     enum_fields: ArrayHashMap(EntityId, u32) = .{},
 
     // atdf has modes which make registers into unions
@@ -170,35 +127,30 @@ pub fn deinit(db: *Database) void {
     db.attrs.enums.deinit(db.gpa);
     db.attrs.modes.deinit(db.gpa);
 
+    // children
+    deinitMapAndValues(db.gpa, &db.children.interrupts);
+    deinitMapAndValues(db.gpa, &db.children.register_groups);
+    deinitMapAndValues(db.gpa, &db.children.registers);
+    deinitMapAndValues(db.gpa, &db.children.fields);
+    deinitMapAndValues(db.gpa, &db.children.enums);
+    deinitMapAndValues(db.gpa, &db.children.enum_fields);
+    deinitMapAndValues(db.gpa, &db.children.modes);
+
     // types
-    deinitMapAndValues(db.gpa, &db.types.peripherals);
-    deinitMapAndValues(db.gpa, &db.types.register_groups);
-    deinitMapAndValues(db.gpa, &db.types.registers);
+    db.types.peripherals.deinit(db.gpa);
+    db.types.register_groups.deinit(db.gpa);
+    db.types.registers.deinit(db.gpa);
     db.types.fields.deinit(db.gpa);
-    deinitMapAndValues(db.gpa, &db.types.enums);
+    db.types.enums.deinit(db.gpa);
     db.types.enum_fields.deinit(db.gpa);
     db.types.modes.deinit(db.gpa);
 
     // instances
+    deinitMapAndValues(db.gpa, &db.instances.devices);
     db.instances.interrupts.deinit(db.gpa);
+    db.instances.peripherals.deinit(db.gpa);
     db.instances.register_groups.deinit(db.gpa);
     db.instances.registers.deinit(db.gpa);
-
-    {
-        var it = db.instances.devices.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.interrupts.deinit(db.gpa);
-            entry.value_ptr.properties.deinit(db.gpa);
-        }
-    }
-    db.instances.devices.deinit(db.gpa);
-
-    {
-        var it = db.instances.peripherals.iterator();
-        while (it.next()) |entry|
-            entry.value_ptr.children.deinit(db.gpa);
-    }
-    db.instances.peripherals.deinit(db.gpa);
 
     // indexes
 
@@ -292,6 +244,32 @@ pub fn addSize(db: *Database, id: EntityId, size: u64) !void {
 pub fn addOffset(db: *Database, id: EntityId, offset: u64) !void {
     std.log.debug("{}: adding offset: {}", .{ id, offset });
     try db.attrs.offsets.putNoClobber(db.gpa, id, offset);
+}
+
+pub fn addChild(
+    db: *Database,
+    comptime entity_location: []const u8,
+    parent_id: EntityId,
+    child_id: EntityId,
+) !void {
+    std.log.debug("{}: ({s}) is child of: {}", .{
+        child_id,
+        entity_location,
+        parent_id,
+    });
+
+    assert(db.entityIs(entity_location, child_id));
+    comptime var it = std.mem.tokenize(u8, entity_location, ".");
+    // the tables are in plural form but "type.peripheral" feels better to me
+    // for calling this function
+    comptime _ = it.next();
+    comptime var table = (it.next() orelse unreachable) ++ "s";
+
+    const result = try @field(db.children, table).getOrPut(db.gpa, parent_id);
+    if (!result.found_existing)
+        result.value_ptr.* = .{};
+
+    try result.value_ptr.put(db.gpa, child_id, {});
 }
 
 pub fn addDeviceProperty(
