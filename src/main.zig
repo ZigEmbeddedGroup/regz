@@ -120,7 +120,7 @@ fn mainImpl() anyerror!void {
     };
     defer db.deinit();
 
-    const writer = if (res.args.output_path) |output_path|
+    const raw_writer = if (res.args.output_path) |output_path|
         if (std.fs.path.isAbsolute(output_path)) writer: {
             if (std.fs.path.dirname(output_path)) |dirname| {
                 _ = dirname;
@@ -137,12 +137,13 @@ fn mainImpl() anyerror!void {
     else
         std.io.getStdOut().writer();
 
+    var buffered = std.io.bufferedWriter(raw_writer);
     if (res.args.json)
-        try db.jsonStringify(.{}, writer)
+        try db.jsonStringify(.{}, buffered.writer())
     else
-        try db.toZig(writer);
+        try db.toZig(buffered.writer());
 
-    try writer.writeByte('\n');
+    try buffered.flush();
 }
 
 fn readFn(ctx: ?*anyopaque, buffer: ?[*]u8, len: c_int) callconv(.C) c_int {

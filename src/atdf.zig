@@ -11,6 +11,8 @@ const Peripheral = @import("Peripheral.zig");
 const Register = @import("Register.zig");
 const Field = @import("Field.zig");
 
+const log = std.log.scoped(.atdf);
+
 // TODO: scratchpad datastructure for temporary string based relationships,
 // then stitch it all together in the end
 pub fn loadIntoDb(db: *Database, doc: xml.Doc) !void {
@@ -37,7 +39,7 @@ fn loadDevice(db: *Database, node: xml.Node) !void {
     const id = db.createEntity();
     errdefer db.destroyEntity(id);
 
-    std.log.debug("{}: creating device", .{id});
+    log.debug("{}: creating device", .{id});
     const name = node.getAttribute("name") orelse return error.NoDeviceName;
     const arch = node.getAttribute("architecture") orelse return error.NoDeviceArch;
     const family = node.getAttribute("family") orelse return error.NoDeviceFamily;
@@ -50,13 +52,15 @@ fn loadDevice(db: *Database, node: xml.Node) !void {
 
     var module_it = node.iterate(&.{"peripherals"}, "module");
     while (module_it.next()) |module_node|
-        loadModuleInstances(db, module_node) catch |err| {
-            std.log.warn("failed to instantiate module: {}", .{err});
+        loadModuleInstances(db, module_node, id) catch |err| {
+            log.warn("failed to instantiate module: {}", .{err});
         };
 
     var interrupt_it = node.iterate(&.{"interrupts"}, "interrupt");
     while (interrupt_it.next()) |interrupt_node|
         try loadInterrupt(db, interrupt_node, id);
+
+    //try patchRegisterGroups(db);
 
     // TODO:
     // address-space.memory-segment
@@ -72,12 +76,13 @@ fn loadDevice(db: *Database, node: xml.Node) !void {
 }
 
 // TODO: instances use name in module
-fn getInlinedRegisterGroup(parent_node: xml.Node, parent_name: []const u8, name_key: [:0]const u8) ?xml.Node {
+fn getInlinedRegisterGroup(parent_node: xml.Node, parent_name: []const u8) ?xml.Node {
     var register_group_it = parent_node.iterate(&.{}, "register-group");
     const rg_node = register_group_it.next() orelse return null;
-    const rg_name = rg_node.getAttribute(name_key) orelse return null;
+    const rg_name = rg_node.getAttribute("name") orelse return null;
+    log.debug("rg name is {s}, parent is {s}", .{ rg_name, parent_name });
     if (register_group_it.next() != null) {
-        std.log.debug("register group not alone", .{});
+        log.debug("register group not alone", .{});
         return null;
     }
 
@@ -101,7 +106,7 @@ fn loadModuleType(db: *Database, node: xml.Node) !void {
     const id = db.createEntity();
     errdefer db.destroyEntity(id);
 
-    std.log.debug("{}: creating peripheral type", .{id});
+    log.debug("{}: creating peripheral type", .{id});
     try db.types.peripherals.put(db.gpa, id, {});
     const name = node.getAttribute("name") orelse return error.ModuleTypeMissingName;
     try db.addName(id, name);
@@ -117,7 +122,7 @@ fn loadModuleType(db: *Database, node: xml.Node) !void {
     // group and it's name matches the peripheral, then inline the
     // registers. This operation needs to be done in
     // `loadModuleInstance()` as well
-    if (getInlinedRegisterGroup(node, name, "name")) |register_group_node| {
+    if (getInlinedRegisterGroup(node, name)) |register_group_node| {
         try loadRegisterGroupChildren(db, register_group_node, id);
     } else {
         var register_group_it = node.iterate(&.{}, "register-group");
@@ -138,7 +143,7 @@ fn loadRegisterGroupChildren(
     var mode_it = node.iterate(&.{}, "mode");
     while (mode_it.next()) |mode_node|
         loadMode(db, mode_node, dest_id) catch |err| {
-            std.log.err("{}: failed to load mode: {}", .{ dest_id, err });
+            log.err("{}: failed to load mode: {}", .{ dest_id, err });
         };
 
     var register_it = node.iterate(&.{}, "register");
@@ -182,7 +187,7 @@ fn loadRegisterGroup(
     const id = db.createEntity();
     errdefer db.destroyEntity(id);
 
-    std.log.debug("{}: creating register group", .{id});
+    log.debug("{}: creating register group", .{id});
     try db.types.register_groups.put(db.gpa, id, {});
     if (node.getAttribute("name")) |name|
         try db.addName(id, name);
@@ -218,7 +223,7 @@ fn loadMode(db: *Database, node: xml.Node, parent_id: EntityId) !void {
 
     const value_str = node.getAttribute("value") orelse return error.MissingModeValue;
     const qualifier = node.getAttribute("qualifier") orelse return error.MissingModeQualifier;
-    std.log.debug("{}: creating mode, value={s}, qualifier={s}", .{ id, value_str, qualifier });
+    log.debug("{}: creating mode, value={s}, qualifier={s}", .{ id, value_str, qualifier });
     try db.types.modes.put(db.gpa, id, .{
         .value = try db.arena.allocator().dupe(u8, value_str),
         .qualifier = try db.arena.allocator().dupe(u8, qualifier),
@@ -245,16 +250,16 @@ fn assignModesToEntity(
     var modes = Database.Modes{};
     errdefer modes.deinit(db.gpa);
 
-    const modeset = if (db.children.modes.get(parent_id)) |modeset|
-        modeset
+    const mode_set = if (db.children.modes.get(parent_id)) |mode_set|
+        mode_set
     else {
-        std.log.warn("{}: failed to find mode set", .{id});
+        log.warn("{}: failed to find mode set", .{id});
         return;
     };
 
     var tok_it = std.mem.tokenize(u8, mode_names, " ");
     while (tok_it.next()) |mode_str| {
-        var it = modeset.iterator();
+        var it = mode_set.iterator();
         while (it.next()) |mode_entry| {
             const mode_id = mode_entry.key_ptr.*;
             if (db.attrs.names.get(mode_id)) |name|
@@ -264,17 +269,17 @@ fn assignModesToEntity(
                         result.value_ptr.* = .{};
 
                     try result.value_ptr.put(db.gpa, mode_id, {});
-                    std.log.debug("{}: assigned mode '{s}'", .{ id, name });
+                    log.debug("{}: assigned mode '{s}'", .{ id, name });
                     return;
                 };
         } else {
             if (db.attrs.names.get(id)) |name|
-                std.log.warn("failed to find mode '{s}' for '{s}'", .{
+                log.warn("failed to find mode '{s}' for '{s}'", .{
                     mode_str,
                     name,
                 })
             else
-                std.log.warn("failed to find mode '{s}'", .{
+                log.warn("failed to find mode '{s}'", .{
                     mode_str,
                 });
 
@@ -314,26 +319,36 @@ fn loadRegister(
     const id = db.createEntity();
     errdefer db.destroyEntity(id);
 
-    std.log.debug("{}: creating register", .{id});
+    log.debug("{}: creating register", .{id});
     const name = node.getAttribute("name") orelse return error.MissingRegisterName;
     try db.types.registers.put(db.gpa, id, {});
     try db.addName(id, name);
     if (node.getAttribute("modes")) |modes|
         assignModesToEntity(db, id, parent_id, modes) catch {
-            std.log.warn("failed to find mode '{s}' for register '{s}'", .{
+            log.warn("failed to find mode '{s}' for register '{s}'", .{
                 modes,
                 name,
             });
         };
 
+    if (node.getAttribute("caption")) |caption|
+        try db.addDescription(id, caption);
+
+    // offset is in bytes
     if (node.getAttribute("offset")) |offset_str| {
         const offset = try std.fmt.parseInt(u64, offset_str, 0);
         try db.addOffset(id, offset);
     }
 
+    // size is in bytes, convert to bits
     if (node.getAttribute("size")) |size_str| {
         const size = try std.fmt.parseInt(u64, size_str, 0);
-        try db.addSize(id, size);
+        try db.addSize(id, size * 8);
+    }
+
+    if (node.getAttribute("initval")) |initval_str| {
+        const initval = try std.fmt.parseInt(u64, initval_str, 0);
+        try db.addResetValue(id, initval);
     }
 
     if (node.getAttribute("rw")) |access_str| blk: {
@@ -352,7 +367,7 @@ fn loadRegister(
     var mode_it = node.iterate(&.{}, "mode");
     while (mode_it.next()) |mode_node|
         loadMode(db, mode_node, id) catch |err| {
-            std.log.err("{}: failed to load mode: {}", .{ id, err });
+            log.err("{}: failed to load mode: {}", .{ id, err });
         };
 
     var field_it = node.iterate(&.{}, "bitfield");
@@ -378,7 +393,7 @@ fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
     const name = node.getAttribute("name") orelse return error.MissingFieldName;
     const mask_str = node.getAttribute("mask") orelse return error.MissingFieldMask;
     const mask = std.fmt.parseInt(u64, mask_str, 0) catch |err| {
-        std.log.warn("failed to parse mask '{s}' of bitfield '{s}'", .{
+        log.warn("failed to parse mask '{s}' of bitfield '{s}'", .{
             mask_str,
             name,
         });
@@ -405,7 +420,7 @@ fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
                 const id = db.createEntity();
                 errdefer db.destroyEntity(id);
 
-                std.log.debug("{}: creating field", .{id});
+                log.debug("{}: creating field", .{id});
                 try db.types.fields.put(db.gpa, id, {});
                 try db.addName(id, field_name);
                 try db.addOffset(id, i);
@@ -415,7 +430,7 @@ fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
 
                 if (node.getAttribute("modes")) |modes|
                     assignModesToEntity(db, id, register_id, modes) catch {
-                        std.log.warn("failed to find mode '{s}' for field '{s}'", .{
+                        log.warn("failed to find mode '{s}' for field '{s}'", .{
                             modes,
                             name,
                         });
@@ -443,7 +458,7 @@ fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
         const id = db.createEntity();
         errdefer db.destroyEntity(id);
 
-        std.log.debug("{}: creating field", .{id});
+        log.debug("{}: creating field", .{id});
         try db.types.fields.put(db.gpa, id, {});
         try db.addName(id, name);
         try db.addOffset(id, offset);
@@ -454,7 +469,7 @@ fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
         // TODO: modes are space delimited, and multiple can apply to a single bitfield or register
         if (node.getAttribute("modes")) |modes|
             assignModesToEntity(db, id, register_id, modes) catch {
-                std.log.warn("failed to find mode '{s}' for field '{s}'", .{
+                log.warn("failed to find mode '{s}' for field '{s}'", .{
                     modes,
                     name,
                 });
@@ -480,11 +495,11 @@ fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
                 const enum_id = entry.key_ptr.*;
                 const enum_name = db.attrs.names.get(enum_id) orelse continue;
                 if (std.mem.eql(u8, enum_name, values)) {
-                    std.log.debug("{}: assigned enum '{s}'", .{ id, enum_name });
+                    log.debug("{}: assigned enum '{s}'", .{ id, enum_name });
                     try db.attrs.enums.put(db.gpa, id, enum_id);
                     break;
                 }
-            } else std.log.debug("{}: failed to find corresponding enum", .{id});
+            } else log.debug("{}: failed to find corresponding enum", .{id});
         }
 
         try db.addChild("type.field", register_id, id);
@@ -517,7 +532,7 @@ fn loadEnum(
     const id = db.createEntity();
     errdefer db.destroyEntity(id);
 
-    std.log.debug("{}: creating enum", .{id});
+    log.debug("{}: creating enum", .{id});
     const name = node.getAttribute("name") orelse return error.MissingEnumName;
     try db.types.enums.put(db.gpa, id, {});
     try db.addName(id, name);
@@ -546,12 +561,12 @@ fn loadEnumField(
 
     const name = node.getAttribute("name") orelse return error.MissingEnumFieldName;
     const value_str = node.getAttribute("value") orelse {
-        std.log.warn("enum missing value: {s}", .{name});
+        log.warn("enum missing value: {s}", .{name});
         return error.MissingEnumFieldValue;
     };
 
     const value = std.fmt.parseInt(u32, value_str, 0) catch |err| {
-        std.log.warn("failed to parse enum value '{s}' of enum field '{s}'", .{
+        log.warn("failed to parse enum value '{s}' of enum field '{s}'", .{
             value_str,
             name,
         });
@@ -561,7 +576,7 @@ fn loadEnumField(
     const id = db.createEntity();
     errdefer db.destroyEntity(id);
 
-    std.log.debug("{}: creating enum field with value: {}", .{ id, value });
+    log.debug("{}: creating enum field with value: {}", .{ id, value });
     try db.addName(id, name);
     try db.types.enum_fields.put(db.gpa, id, value);
     if (node.getAttribute("caption")) |caption|
@@ -571,7 +586,11 @@ fn loadEnumField(
 }
 
 // module instances are listed under atdf-tools-device-file.devices.device.peripherals
-fn loadModuleInstances(db: *Database, node: xml.Node) !void {
+fn loadModuleInstances(
+    db: *Database,
+    node: xml.Node,
+    device_id: EntityId,
+) !void {
     const module_name = node.getAttribute("name") orelse return error.MissingModuleName;
     const type_id = blk: {
         var periph_it = db.types.peripherals.iterator();
@@ -580,7 +599,7 @@ fn loadModuleInstances(db: *Database, node: xml.Node) !void {
                 if (std.mem.eql(u8, entry_name, module_name))
                     break :blk entry.key_ptr.*;
         } else {
-            std.log.warn("failed to find the '{s}' peripheral type", .{
+            log.warn("failed to find the '{s}' peripheral type", .{
                 module_name,
             });
             return error.MissingPeripheralType;
@@ -589,10 +608,15 @@ fn loadModuleInstances(db: *Database, node: xml.Node) !void {
 
     var instance_it = node.iterate(&.{}, "instance");
     while (instance_it.next()) |instance_node|
-        try loadModuleInstance(db, instance_node, type_id);
+        try loadModuleInstance(db, instance_node, device_id, type_id);
 }
 
-fn loadModuleInstance(db: *Database, node: xml.Node, peripheral_type_id: EntityId) !void {
+fn loadModuleInstance(
+    db: *Database,
+    node: xml.Node,
+    device_id: EntityId,
+    peripheral_type_id: EntityId,
+) !void {
     assert(db.entityIs("type.peripheral", peripheral_type_id));
 
     validateAttrs(node, &.{
@@ -604,23 +628,28 @@ fn loadModuleInstance(db: *Database, node: xml.Node, peripheral_type_id: EntityI
     const id = db.createEntity();
     errdefer db.destroyEntity(id);
 
-    std.log.debug("{}: creating module instance", .{id});
+    log.debug("{}: creating module instance", .{id});
     const name = node.getAttribute("name") orelse return error.MissingInstanceName;
-    try db.instances.peripherals.put(db.gpa, id, .{ .type_id = peripheral_type_id });
+    try db.instances.peripherals.put(db.gpa, id, peripheral_type_id);
     try db.addName(id, name);
-    if (getInlinedRegisterGroup(node, name, "name")) |register_group_node| {
+    if (getInlinedRegisterGroup(node, name)) |register_group_node| {
+        log.debug("{}: inlining", .{id});
         const offset_str = register_group_node.getAttribute("offset") orelse return error.MissingPeripheralOffset;
         const offset = try std.fmt.parseInt(u64, offset_str, 0);
         try db.addOffset(id, offset);
     } else {
         var register_group_it = node.iterate(&.{}, "register-group");
         while (register_group_it.next()) |register_group_node|
-            loadRegisterGroupInstance(db, register_group_node, id, peripheral_type_id) catch {};
+            loadRegisterGroupInstance(db, register_group_node, id, peripheral_type_id) catch {
+                log.warn("skipping register group instance in {s}", .{name});
+            };
     }
 
     var signal_it = node.iterate(&.{"signals"}, "signal");
     while (signal_it.next()) |signal_node|
         try loadSignal(db, signal_node, id);
+
+    try db.addChild("instance.peripheral", device_id, id);
 
     // TODO:
     // clock-groups.clock-group.clock
@@ -649,11 +678,11 @@ fn loadRegisterGroupInstance(
     const id = db.createEntity();
     errdefer db.destroyEntity(id);
 
-    std.log.debug("{}: creating register group instance", .{id});
+    log.debug("{}: creating register group instance", .{id});
     const name = node.getAttribute("name") orelse return error.MissingInstanceName;
     // TODO: this isn't always a set value, not sure what to do if it's left out
     const name_in_module = node.getAttribute("name-in-module") orelse {
-        std.log.warn("no 'name-in-module' for register group '{s}'", .{
+        log.warn("no 'name-in-module' for register group '{s}'", .{
             name,
         });
 
@@ -730,14 +759,14 @@ fn loadInterrupt(db: *Database, node: xml.Node, device_id: EntityId) !void {
     const name = node.getAttribute("name") orelse return error.MissingInterruptName;
     const index_str = node.getAttribute("index") orelse return error.MissingInterruptIndex;
     const index = std.fmt.parseInt(i32, index_str, 0) catch |err| {
-        std.log.warn("failed to parse value '{s}' of interrupt '{s}'", .{
+        log.warn("failed to parse value '{s}' of interrupt '{s}'", .{
             index_str,
             name,
         });
         return err;
     };
 
-    std.log.debug("{}: creating interrupt {}", .{ id, index });
+    log.debug("{}: creating interrupt {}", .{ id, index });
     try db.instances.interrupts.put(db.gpa, id, index);
     try db.addName(id, name);
     if (node.getAttribute("caption")) |caption|
@@ -754,7 +783,7 @@ fn validateAttrs(node: xml.Node, attrs: []const []const u8) void {
         for (attrs) |expected_attr| {
             if (std.mem.eql(u8, attr.key, expected_attr))
                 break;
-        } else std.log.warn("line {}: the '{s}' isn't usually found in the '{s}' element, this could mean unhandled ATDF behaviour or your input is malformed", .{
+        } else log.warn("line {}: the '{s}' isn't usually found in the '{s}' element, this could mean unhandled ATDF behaviour or your input is malformed", .{
             node.impl.line,
             attr.key,
             std.mem.span(node.impl.name),
@@ -765,6 +794,168 @@ fn validateAttrs(node: xml.Node, attrs: []const []const u8) void {
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectEqualStrings = std.testing.expectEqualStrings;
+
+// NOTE TO SELF:
+// you need to write some tests to ensure bitfields are being parsed correctly
+test "register with bitfields and enum" {
+    const text =
+        \\<avr-tools-device-file>
+        \\  <modules>
+        \\    <module caption="Real-Time Counter" id="I2116" name="RTC">
+        \\      <register-group caption="Real-Time Counter" name="RTC" size="0x20">
+        \\        <register caption="Control A"
+        \\                  initval="0x00"
+        \\                  name="CTRLA"
+        \\                  offset="0x00"
+        \\                  rw="RW"
+        \\                  size="1">
+        \\          <bitfield caption="Enable"
+        \\                    mask="0x01"
+        \\                    name="RTCEN"
+        \\                    rw="RW"/>
+        \\          <bitfield caption="Correction enable"
+        \\                    mask="0x04"
+        \\                    name="CORREN"
+        \\                    rw="RW"/>
+        \\          <bitfield caption="Prescaling Factor"
+        \\                    mask="0x78"
+        \\                    name="PRESCALER"
+        \\                    rw="RW"
+        \\                    values="RTC_PRESCALER"/>
+        \\          <bitfield caption="Run In Standby"
+        \\                    mask="0x80"
+        \\                    name="RUNSTDBY"
+        \\                    rw="RW"/>
+        \\        </register>
+        \\      </register-group>
+        \\      <value-group caption="Prescaling Factor select" name="RTC_PRESCALER">
+        \\         <value caption="RTC Clock / 1" name="DIV1" value="0x00"/>
+        \\         <value caption="RTC Clock / 2" name="DIV2" value="0x01"/>
+        \\      </value-group>
+        \\    </module>
+        \\  </modules>
+        \\</avr-tools-device-file>
+    ;
+    var doc = try xml.Doc.fromMemory(text);
+    var db = try Database.initFromAtdf(std.testing.allocator, doc);
+    defer db.deinit();
+
+    // RTC_PRESCALER enum checks
+    // =========================
+    const enum_id = try db.getEntityIdByName("type.enum", "RTC_PRESCALER");
+
+    try expect(db.attrs.descriptions.contains(enum_id));
+    try expect(db.children.enum_fields.contains(enum_id));
+    try expectEqualStrings("Prescaling Factor select", db.attrs.descriptions.get(enum_id).?);
+
+    // DIV1 enum field checks
+    // ======================
+    const div1_id = try db.getEntityIdByName("type.enum_field", "DIV1");
+
+    try expect(db.attrs.descriptions.contains(div1_id));
+    try expectEqualStrings("RTC Clock / 1", db.attrs.descriptions.get(div1_id).?);
+    try expectEqual(@as(u32, 0), db.types.enum_fields.get(div1_id).?);
+
+    // DIV2 enum field checks
+    // ======================
+    const div2_id = try db.getEntityIdByName("type.enum_field", "DIV2");
+
+    try expect(db.attrs.descriptions.contains(div2_id));
+    try expectEqualStrings("RTC Clock / 2", db.attrs.descriptions.get(div2_id).?);
+    try expectEqual(@as(u32, 1), db.types.enum_fields.get(div2_id).?);
+
+    // CTRLA register checks
+    // ===============
+    const register_id = try db.getEntityIdByName("type.register", "CTRLA");
+
+    // attributes/chidren CTRLA should have
+    try expect(db.attrs.names.contains(register_id));
+    try expect(db.attrs.descriptions.contains(register_id));
+    try expect(db.attrs.offsets.contains(register_id));
+    try expect(db.attrs.sizes.contains(register_id));
+    try expect(db.attrs.reset_values.contains(register_id));
+    try expect(db.children.fields.contains(register_id));
+
+    // access is read-write, so its entry is omitted (we assume read-write by default)
+    try expect(!db.attrs.access.contains(register_id));
+
+    // check name and description
+    try expectEqualStrings("CTRLA", db.attrs.names.get(register_id).?);
+    try expectEqualStrings("Control A", db.attrs.descriptions.get(register_id).?);
+
+    // reset value of the register is 0 (initval attribute)
+    try expectEqual(@as(u64, 0), db.attrs.reset_values.get(register_id).?);
+
+    // byte offset is 0
+    try expectEqual(@as(u64, 0), db.attrs.offsets.get(register_id).?);
+
+    // size of register is 8 bits, note that ATDF measures in bytes
+    try expectEqual(@as(u64, 8), db.attrs.sizes.get(register_id).?);
+
+    // there will 4 registers total, they will all be children of the one register
+    try expectEqual(@as(usize, 4), db.types.fields.count());
+    try expectEqual(@as(usize, 4), db.children.fields.get(register_id).?.count());
+
+    // RTCEN field checks
+    // ============
+    const rtcen_id = try db.getEntityIdByName("type.field", "RTCEN");
+
+    // attributes RTCEN should/shouldn't have
+    try expect(db.attrs.descriptions.contains(rtcen_id));
+    try expect(db.attrs.offsets.contains(rtcen_id));
+    try expect(db.attrs.sizes.contains(rtcen_id));
+    try expect(!db.attrs.access.contains(rtcen_id));
+
+    try expectEqualStrings("Enable", db.attrs.descriptions.get(rtcen_id).?);
+    try expectEqual(@as(u64, 0), db.attrs.offsets.get(rtcen_id).?);
+    try expectEqual(@as(u64, 1), db.attrs.sizes.get(rtcen_id).?);
+
+    // CORREN field checks
+    // ============
+    const corren_id = try db.getEntityIdByName("type.field", "CORREN");
+
+    // attributes CORREN should/shouldn't have
+    try expect(db.attrs.descriptions.contains(corren_id));
+    try expect(db.attrs.offsets.contains(corren_id));
+    try expect(db.attrs.sizes.contains(corren_id));
+    try expect(!db.attrs.access.contains(corren_id));
+
+    try expectEqualStrings("Correction enable", db.attrs.descriptions.get(corren_id).?);
+    try expectEqual(@as(u64, 2), db.attrs.offsets.get(corren_id).?);
+    try expectEqual(@as(u64, 1), db.attrs.sizes.get(corren_id).?);
+
+    // PRESCALER field checks
+    // ============
+    const prescaler_id = try db.getEntityIdByName("type.field", "PRESCALER");
+
+    // attributes PRESCALER should/shouldn't have
+    try expect(db.attrs.descriptions.contains(prescaler_id));
+    try expect(db.attrs.offsets.contains(prescaler_id));
+    try expect(db.attrs.sizes.contains(prescaler_id));
+    try expect(db.attrs.enums.contains(prescaler_id));
+    try expect(!db.attrs.access.contains(prescaler_id));
+
+    try expectEqualStrings("Prescaling Factor", db.attrs.descriptions.get(prescaler_id).?);
+    try expectEqual(@as(u64, 3), db.attrs.offsets.get(prescaler_id).?);
+    try expectEqual(@as(u64, 4), db.attrs.sizes.get(prescaler_id).?);
+
+    // this field has an enum value
+    try expectEqual(enum_id, db.attrs.enums.get(prescaler_id).?);
+
+    // RUNSTDBY field checks
+    // ============
+    const runstdby_id = try db.getEntityIdByName("type.field", "RUNSTDBY");
+
+    // attributes RUNSTDBY should/shouldn't have
+    try expect(db.attrs.descriptions.contains(runstdby_id));
+    try expect(db.attrs.offsets.contains(runstdby_id));
+    try expect(db.attrs.sizes.contains(runstdby_id));
+    try expect(!db.attrs.access.contains(runstdby_id));
+
+    try expectEqualStrings("Run In Standby", db.attrs.descriptions.get(runstdby_id).?);
+    try expectEqual(@as(u64, 7), db.attrs.offsets.get(runstdby_id).?);
+    try expectEqual(@as(u64, 1), db.attrs.sizes.get(runstdby_id).?);
+}
 
 test "register with mode" {
     const text =
@@ -807,10 +998,10 @@ test "register with mode" {
 
     // the register will have one associated mode
     try expect(db.attrs.modes.contains(register_id));
-    const modeset = db.attrs.modes.get(register_id).?;
-    try expectEqual(@as(usize, 1), modeset.count());
+    const mode_set = db.attrs.modes.get(register_id).?;
+    try expectEqual(@as(usize, 1), mode_set.count());
     const mode_id = blk: {
-        var it = modeset.iterator();
+        var it = mode_set.iterator();
         break :blk it.next().?.key_ptr.*;
     };
 
@@ -826,7 +1017,21 @@ test "register with mode" {
         var it = db.types.peripherals.iterator();
         break :blk it.next().?.key_ptr.*;
     };
+
     try expect(db.children.modes.contains(peripheral_id));
     const peripheral_modes = db.children.modes.get(peripheral_id).?;
     try expect(peripheral_modes.contains(mode_id));
+}
+
+test "instance without offset" {
+    const text =
+        \\<avr-tools-device-file>
+        \\  <modules>
+        \\  </modules>
+        \\</avr-tools-device-file>
+        \\
+    ;
+    _ = text;
+    // TODO: register group lacking an offset (make offset the smallest register
+    // value and fix offsets of children
 }

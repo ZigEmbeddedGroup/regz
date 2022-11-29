@@ -8,6 +8,8 @@ const Database = @import("Database.zig");
 const EntityId = Database.EntityId;
 const PeripheralInstance = Database.PeripheralInstance;
 
+const log = std.log.scoped(.regzon);
+
 pub fn loadIntoDb(db: *Database, reader: anytype) !void {
     _ = db;
     _ = reader;
@@ -216,7 +218,7 @@ fn populatePeripheral(
     types_to_populate: *std.StringArrayHashMap(EntityId),
     peripherals: *json.ObjectMap,
     id: EntityId,
-    instance: PeripheralInstance,
+    type_id: EntityId,
 ) !void {
     const allocator = arena.allocator();
     const name = db.attrs.names.get(id) orelse return error.MissingPeripheralName;
@@ -232,9 +234,9 @@ fn populatePeripheral(
 
     // if the peripheral instance's type is named, then we add it to the list
     // of types to populate
-    if (db.attrs.names.get(instance.type_id)) |type_name| {
+    if (db.attrs.names.get(type_id)) |type_name| {
         // TODO: handle collisions -- will need to inline the type
-        try types_to_populate.put(type_name, instance.type_id);
+        try types_to_populate.put(type_name, type_id);
         try peripheral.put("type", .{ .String = type_name });
     }
 

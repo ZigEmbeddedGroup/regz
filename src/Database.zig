@@ -13,9 +13,9 @@ const gen = @import("gen.zig");
 const regzon = @import("regzon.zig");
 
 const Database = @This();
+const log = std.log.scoped(.database);
 
 pub const EntityId = u32;
-pub const InterruptIndex = u32;
 pub const EntitySet = ArrayHashMap(EntityId, void);
 
 pub const Access = enum {
@@ -23,9 +23,6 @@ pub const Access = enum {
     write_only,
     read_write,
 };
-
-/// an interrupt has a numeric index
-pub const Interrupt = i32;
 
 pub const Device = struct {
     properties: std.StringHashMapUnmanaged([]const u8) = .{},
@@ -43,13 +40,8 @@ pub const Mode = struct {
 /// a collection of modes that applies to a register or bitfield
 pub const Modes = EntitySet;
 
-/// a peripheral instance has an associated peripheral type, and register and register group instances
-pub const PeripheralInstance = struct {
-    type_id: EntityId,
-};
-
 gpa: Allocator,
-arena: ArenaAllocator,
+arena: *ArenaAllocator,
 next_entity_id: u32,
 
 // attributes are extra information that each entity might have, in some
@@ -74,6 +66,7 @@ attrs: struct {
 
 children: struct {
     interrupts: ArrayHashMap(EntityId, EntitySet) = .{},
+    peripherals: ArrayHashMap(EntityId, EntitySet) = .{},
     register_groups: ArrayHashMap(EntityId, EntitySet) = .{},
     registers: ArrayHashMap(EntityId, EntitySet) = .{},
     fields: ArrayHashMap(EntityId, EntitySet) = .{},
@@ -96,8 +89,8 @@ types: struct {
 
 instances: struct {
     devices: ArrayHashMap(EntityId, Device) = .{},
-    interrupts: ArrayHashMap(EntityId, Interrupt) = .{},
-    peripherals: ArrayHashMap(EntityId, PeripheralInstance) = .{},
+    interrupts: ArrayHashMap(EntityId, i32) = .{},
+    peripherals: ArrayHashMap(EntityId, EntityId) = .{},
     register_groups: ArrayHashMap(EntityId, EntityId) = .{},
     registers: ArrayHashMap(EntityId, EntityId) = .{},
 } = .{},
@@ -129,6 +122,7 @@ pub fn deinit(db: *Database) void {
 
     // children
     deinitMapAndValues(db.gpa, &db.children.interrupts);
+    deinitMapAndValues(db.gpa, &db.children.peripherals);
     deinitMapAndValues(db.gpa, &db.children.register_groups);
     deinitMapAndValues(db.gpa, &db.children.registers);
     deinitMapAndValues(db.gpa, &db.children.fields);
@@ -155,19 +149,22 @@ pub fn deinit(db: *Database) void {
     // indexes
 
     db.arena.deinit();
+    db.gpa.destroy(db.arena);
 }
 
-pub fn init(allocator: std.mem.Allocator) Database {
+pub fn init(allocator: std.mem.Allocator) !Database {
+    const arena = try allocator.create(ArenaAllocator);
+    arena.* = std.heap.ArenaAllocator.init(allocator);
     return Database{
         .gpa = allocator,
-        .arena = std.heap.ArenaAllocator.init(allocator),
+        .arena = arena,
         .next_entity_id = 0,
     };
 }
 
 // TODO: figure out how to do completions: bash, zsh, fish, powershell, cmd
 pub fn initFromAtdf(allocator: Allocator, doc: xml.Doc) !Database {
-    var db = Database.init(allocator);
+    var db = try Database.init(allocator);
     errdefer db.deinit();
 
     try atdf.loadIntoDb(&db, doc);
@@ -175,7 +172,7 @@ pub fn initFromAtdf(allocator: Allocator, doc: xml.Doc) !Database {
 }
 
 pub fn initFromSvd(allocator: Allocator, doc: xml.Doc) !Database {
-    var db = Database.init(allocator);
+    var db = try Database.init(allocator);
     errdefer db.deinit();
 
     try svd.loadIntoDb(&db, doc);
@@ -183,7 +180,7 @@ pub fn initFromSvd(allocator: Allocator, doc: xml.Doc) !Database {
 }
 
 pub fn initFromDslite(allocator: Allocator, doc: xml.Doc) !Database {
-    var db = Database.init(allocator);
+    var db = try Database.init(allocator);
     errdefer db.deinit();
 
     try dslite.loadIntoDb(&db, doc);
@@ -191,7 +188,7 @@ pub fn initFromDslite(allocator: Allocator, doc: xml.Doc) !Database {
 }
 
 pub fn initFromJson(allocator: Allocator, reader: anytype) !Database {
-    var db = Database.init(allocator);
+    var db = try Database.init(allocator);
     errdefer db.deinit();
 
     try regzon.loadIntoDb(&db, reader);
@@ -212,7 +209,7 @@ pub fn addName(db: *Database, id: EntityId, name: []const u8) !void {
     if (name.len == 0)
         return;
 
-    std.log.debug("{}: adding name: {s}", .{ id, name });
+    log.debug("{}: adding name: {s}", .{ id, name });
     try db.attrs.names.putNoClobber(
         db.gpa,
         id,
@@ -228,7 +225,7 @@ pub fn addDescription(
     if (description.len == 0)
         return;
 
-    std.log.debug("{}: adding description: {s}", .{ id, description });
+    log.debug("{}: adding description: {s}", .{ id, description });
     try db.attrs.descriptions.putNoClobber(
         db.gpa,
         id,
@@ -237,13 +234,18 @@ pub fn addDescription(
 }
 
 pub fn addSize(db: *Database, id: EntityId, size: u64) !void {
-    std.log.debug("{}: adding size: {}", .{ id, size });
+    log.debug("{}: adding size: {}", .{ id, size });
     try db.attrs.sizes.putNoClobber(db.gpa, id, size);
 }
 
 pub fn addOffset(db: *Database, id: EntityId, offset: u64) !void {
-    std.log.debug("{}: adding offset: {}", .{ id, offset });
+    log.debug("{}: adding offset: {}", .{ id, offset });
     try db.attrs.offsets.putNoClobber(db.gpa, id, offset);
+}
+
+pub fn addResetValue(db: *Database, id: EntityId, reset_value: u64) !void {
+    log.debug("{}: adding reset value: {}", .{ id, reset_value });
+    try db.attrs.reset_values.putNoClobber(db.gpa, id, reset_value);
 }
 
 pub fn addChild(
@@ -252,7 +254,7 @@ pub fn addChild(
     parent_id: EntityId,
     child_id: EntityId,
 ) !void {
-    std.log.debug("{}: ({s}) is child of: {}", .{
+    log.debug("{}: ({s}) is child of: {}", .{
         child_id,
         entity_location,
         parent_id,
@@ -278,7 +280,7 @@ pub fn addDeviceProperty(
     key: []const u8,
     value: []const u8,
 ) !void {
-    std.log.debug("{}: adding device attr: {s}={s}", .{ id, key, value });
+    log.debug("{}: adding device attr: {s}={s}", .{ id, key, value });
     if (db.instances.devices.getEntry(id)) |entry|
         try entry.value_ptr.properties.put(
             db.gpa,
@@ -299,6 +301,22 @@ pub fn entityIs(db: Database, comptime entity_location: []const u8, id: EntityId
 
     // TODO: nice error messages, like group should either be 'type' or 'instance'
     return @field(@field(db, group), table).contains(id);
+}
+
+pub fn getEntityIdByName(
+    db: Database,
+    comptime entity_location: []const u8,
+    name: []const u8,
+) !EntityId {
+    var it = db.attrs.names.iterator();
+    return while (it.next()) |entry| {
+        const entry_id = entry.key_ptr.*;
+        const entry_name = entry.value_ptr.*;
+        if (std.mem.eql(u8, name, entry_name)) {
+            assert(db.entityIs(entity_location, entry_id));
+            return entry_id;
+        }
+    } else error.NameNotFound;
 }
 
 // assert that the database is in valid state
@@ -346,7 +364,7 @@ pub fn format(
     _ = writer;
 }
 
-pub fn toZig(db: *Database, out_writer: anytype) !void {
+pub fn toZig(db: Database, out_writer: anytype) !void {
     try gen.toZig(db, out_writer);
 }
 
