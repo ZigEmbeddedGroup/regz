@@ -1,8 +1,5 @@
 const std = @import("std");
 const xml = @import("xml.zig");
-const Peripheral = @import("Peripheral.zig");
-const Register = @import("Register.zig");
-const Field = @import("Field.zig");
 const Database = @import("Database.zig");
 
 const ArenaAllocator = std.heap.ArenaAllocator;
