@@ -33,8 +33,9 @@ pub fn toZig(db: Database, out_writer: anytype) !void {
     try writeTypes(db, writer);
     try writer.writeByte(0);
 
+    //try out_writer.writeAll(buffer.items);
     // format the generated code
-    var ast = try std.zig.parse(db.gpa, @ptrCast([:0]const u8, buffer.items));
+    var ast = try std.zig.parse(db.gpa, @ptrCast([:0]const u8, buffer.items[0 .. buffer.items.len - 1]));
     defer ast.deinit(db.gpa);
 
     // TODO: ast check?
@@ -126,11 +127,9 @@ fn writeDevice(db: Database, device_id: EntityId, out_writer: anytype) !void {
 fn writePeripheralInstance(db: Database, peripheral_id: EntityId, offset: u64, out_writer: anytype) !void {
     assert(db.entityIs("instance.peripheral", peripheral_id));
     const name = db.attrs.names.get(peripheral_id) orelse return error.MissingPeripheralInstanceName;
-    const type_name = if (db.instances.peripherals.get(peripheral_id)) |type_id|
-        if (db.attrs.names.get(type_id)) |type_name|
-            type_name
-        else
-            return error.MissingPeripheralInstanceType
+    const type_id = db.instances.peripherals.get(peripheral_id).?;
+    const type_name = if (db.attrs.names.get(type_id)) |type_name|
+        type_name
     else
         return error.MissingPeripheralInstanceType;
 
@@ -139,6 +138,8 @@ fn writePeripheralInstance(db: Database, peripheral_id: EntityId, offset: u64, o
 
     const writer = buffer.writer();
     if (db.attrs.descriptions.get(peripheral_id)) |description|
+        try writer.print("\n/// {s}\n", .{description})
+    else if (db.attrs.descriptions.get(type_id)) |description|
         try writer.print("\n/// {s}\n", .{description});
 
     try writer.print("pub const {s} = @ptrCast(*volatile types.{s}, 0x{x});\n", .{
@@ -161,8 +162,12 @@ fn writeTypes(db: Database, writer: anytype) !void {
     var it = db.types.peripherals.iterator();
     while (it.next()) |entry| {
         const peripheral_id = entry.key_ptr.*;
-
-        try writePeripheral(db, peripheral_id, writer);
+        writePeripheral(db, peripheral_id, writer) catch |err| {
+            log.warn("failed to generate peripheral '{s}': {}", .{
+                db.attrs.names.get(peripheral_id) orelse "<unknown>",
+                err,
+            });
+        };
     }
 
     try writer.writeAll("};\n");
@@ -193,8 +198,6 @@ fn writePeripheralNoModes(
     name: []const u8,
     out_writer: anytype,
 ) !void {
-    log.debug("writePeripheralNoModes()", .{});
-
     var buffer = std.ArrayList(u8).init(db.arena.allocator());
     defer buffer.deinit();
 
@@ -210,6 +213,11 @@ fn writePeripheralNoModes(
         \\pub const {s} = packed struct {{
         \\
     , .{std.zig.fmtId(name)});
+
+    if (db.children.enums.get(peripheral_id)) |enum_set| {
+        try writeEnums(db, enum_set, writer);
+        try writer.writeByte('\n');
+    }
 
     try writeRegisters(db, peripheral_id, registers.items, writer);
     try writer.writeAll("};\n");
@@ -247,11 +255,83 @@ fn writePeripheralWithModes(
 
     try writer.print("pub const {s} = packed union {{\n", .{std.zig.fmtId(name)});
     try writeModeEnumAndFn(db, name, mode_set, writer);
+    if (db.children.enums.get(peripheral_id)) |enum_set|
+        try writeEnums(db, enum_set, writer);
+
     try writer.writeByte('\n');
     try writeRegistersWithModes(db, peripheral_id, mode_set, registers, writer);
     try writer.writeAll("};\n");
 
     try out_writer.writeAll(buffer.items);
+}
+
+fn writeEnums(db: Database, enum_set: EntitySet, writer: anytype) !void {
+    var it = enum_set.iterator();
+    while (it.next()) |entry| {
+        const enum_id = entry.key_ptr.*;
+        try writeEnum(db, enum_id, writer);
+    }
+}
+
+fn writeEnum(db: Database, enum_id: EntityId, out_writer: anytype) !void {
+    var buffer = std.ArrayList(u8).init(db.arena.allocator());
+    defer buffer.deinit();
+
+    const writer = buffer.writer();
+    const name = db.attrs.names.get(enum_id) orelse return;
+    const size = db.attrs.sizes.get(enum_id) orelse return error.MissingEnumSize;
+
+    // TODO: handle this instead of assert
+    // assert(std.math.ceilPowerOfTwo(field_set.count()) <= size);
+
+    if (db.attrs.descriptions.get(enum_id)) |description|
+        try writer.print("/// {s}\n", .{description});
+
+    try writer.print("pub const {s} = enum(u{}) {{\n", .{
+        std.zig.fmtId(name),
+        size,
+    });
+    try writeEnumFields(db, enum_id, writer);
+    try writer.writeAll("};\n");
+
+    try out_writer.writeAll(buffer.items);
+}
+
+fn writeEnumFields(db: Database, enum_id: u32, out_writer: anytype) !void {
+    var buffer = std.ArrayList(u8).init(db.arena.allocator());
+    defer buffer.deinit();
+
+    const writer = buffer.writer();
+    const size = db.attrs.sizes.get(enum_id) orelse return error.MissingEnumSize;
+    const field_set = db.children.enum_fields.get(enum_id) orelse return error.MissingEnumFields;
+    var it = field_set.iterator();
+    while (it.next()) |entry| {
+        const enum_field_id = entry.key_ptr.*;
+        try writeEnumField(db, enum_field_id, size, writer);
+    }
+
+    // if the enum doesn't completely fill the integer then make it a non-exhaustive enum
+    if (field_set.count() < std.math.pow(u64, 2, size))
+        try writer.writeAll("_,\n");
+
+    try out_writer.writeAll(buffer.items);
+}
+
+fn writeEnumField(
+    db: Database,
+    enum_field_id: EntityId,
+    size: u64,
+    writer: anytype,
+) !void {
+    const name = db.attrs.names.get(enum_field_id) orelse return error.MissingEnumFieldName;
+    const value = db.types.enum_fields.get(enum_field_id) orelse return error.MissingEnumFieldValue;
+
+    // TODO: use size to print the hex value (pad with zeroes accordingly)
+    _ = size;
+    if (db.attrs.descriptions.get(enum_field_id)) |description|
+        try writer.print("/// {s}\n", .{description});
+
+    try writer.print("{s} = 0x{x},\n", .{ std.zig.fmtId(name), value });
 }
 
 fn writeModeEnumAndFn(
@@ -344,18 +424,11 @@ fn writeRegistersWithModes(
                 var reg_mode_it = reg_mode_set.iterator();
                 while (reg_mode_it.next()) |reg_mode_entry| {
                     const reg_mode_id = reg_mode_entry.key_ptr.*;
-                    if (reg_mode_id == mode_id) {
+                    if (reg_mode_id == mode_id)
                         try moded_registers.append(register);
-                        const register_name = db.attrs.names.get(register.id).?;
-                        log.debug("{s} has register {s}", .{ mode_name, register_name });
-                    }
                 }
                 // if no mode is specified, then it should always be present
-            } else {
-                try moded_registers.append(register);
-                const register_name = db.attrs.names.get(register.id).?;
-                log.debug("{s} has register {s}", .{ mode_name, register_name });
-            }
+            } else try moded_registers.append(register);
         }
 
         try writer.print("{s}: packed struct {{\n", .{
@@ -375,7 +448,6 @@ fn writeRegisters(
     registers: []const EntityWithOffset,
     out_writer: anytype,
 ) !void {
-    log.debug("writeRegisters()", .{});
     _ = parent_id;
 
     // registers _should_ be sorted when then make their way here
@@ -393,7 +465,7 @@ fn writeRegisters(
 
         while (i < registers.len) {
             if (offset < registers[i].offset) {
-                try writer.print("reserved{}: u{},\n", .{ registers[i].offset, (registers[i].offset - offset) * 8 });
+                try writer.print("reserved{}: u{},\n", .{ registers[i].offset, registers[i].offset - offset });
                 offset = registers[i].offset;
             } else if (offset > registers[i].offset) {
                 if (db.attrs.names.get(registers[i].id)) |name|
@@ -421,7 +493,7 @@ fn writeRegisters(
             };
 
             try writeRegister(db, next.id, writer);
-            // TODO: probably round up to the next power of 8
+            // TODO: round up to next power of two
             assert(next.size % 8 == 0);
             offset += next.size / 8;
             i = end;
@@ -460,11 +532,11 @@ fn writeRegister(
         }
 
         std.sort.sort(EntityWithOffset, fields.items, {}, EntityWithOffset.lessThan);
-        try writer.print("{s}: mmio.Mmio(packed struct{{\n", .{
+        try writer.print("{s}: mmio.Mmio({}, packed struct{{\n", .{
             std.zig.fmtId(name),
+            size,
         });
 
-        log.debug("register name is {s}", .{name});
         try writeFields(db, fields.items, size, writer);
         try writer.writeAll("}),\n");
     } else try writer.print("{s}: u{},\n", .{ std.zig.fmtId(name), size });
@@ -478,12 +550,9 @@ fn writeFields(
     register_size: u64,
     out_writer: anytype,
 ) !void {
-    log.debug("writeFields()", .{});
     assert(std.sort.isSorted(EntityWithOffset, fields, {}, EntityWithOffset.lessThan));
     var buffer = std.ArrayList(u8).init(db.arena.allocator());
     defer buffer.deinit();
-
-    std.log.debug("fields: {any}", .{fields});
 
     // don't have to care about modes
     // prioritize smaller fields that come earlier
@@ -491,12 +560,8 @@ fn writeFields(
     var offset: u64 = 0;
     var i: u32 = 0;
     while (i < fields.len and offset < register_size) {
-        log.debug("offset={}, field_offset={}", .{ offset, fields[i].offset });
         if (offset < fields[i].offset) {
-            log.debug("reserved field size: {}", .{
-                fields[i].offset - offset,
-            });
-            try writer.print("reserved{}: u{},\n", .{ fields[i].offset, fields[i].offset - offset });
+            try writer.print("reserved{}: u{} = 0,\n", .{ fields[i].offset, fields[i].offset - offset });
             offset = fields[i].offset;
         } else if (offset > fields[i].offset) {
             if (db.attrs.names.get(fields[i].id)) |name|
@@ -528,7 +593,6 @@ fn writeFields(
         };
 
         const name = db.attrs.names.get(next.id) orelse unreachable;
-        log.debug("field is {s}", .{name});
         if (offset + next.size > register_size) {
             log.warn("register '{s}' is outside register boundaries: offset={}, size={}, register_size={}", .{
                 name,
@@ -542,8 +606,29 @@ fn writeFields(
         if (db.attrs.descriptions.get(next.id)) |description|
             try writer.print("/// {s}\n", .{description});
 
-        // TODO: check for enum
-        try writer.print("{s}: u{},\n", .{ name, next.size });
+        if (db.attrs.enums.get(fields[i].id)) |enum_id| {
+            if (db.attrs.names.get(enum_id)) |enum_name| {
+                try writer.print(
+                    \\{s}: packed union {{
+                    \\    raw: u{},
+                    \\    value: {s},
+                    \\}},
+                    \\
+                , .{ name, next.size, std.zig.fmtId(enum_name) });
+            } else {
+                try writer.print(
+                    \\{s}: packed union {{
+                    \\    raw: u{},
+                    \\    value: enum(u{}) {{
+                    \\
+                , .{ name, next.size, next.size });
+                try writeEnumFields(db, enum_id, writer);
+                try writer.writeAll("},\n},\n");
+            }
+        } else {
+            try writer.print("{s}: u{},\n", .{ name, next.size });
+        }
+
         offset += next.size;
         i = end;
     }
@@ -570,10 +655,7 @@ fn getOrderedRegisterList(
             const offset = db.attrs.offsets.get(register_id) orelse continue;
             try registers.append(.{ .id = register_id, .offset = offset });
         }
-    } else {
-        log.warn("{}: has no registers", .{parent_id});
-        return error.NoRegisters;
-    }
+    } else log.warn("{}: has no registers", .{parent_id});
 
     std.sort.sort(EntityWithOffset, registers.items, {}, EntityWithOffset.lessThan);
     return registers;
@@ -610,7 +692,7 @@ test "peripheral type with register and field" {
         \\
         \\pub const types = struct {
         \\    pub const TEST_PERIPHERAL = packed struct {
-        \\        TEST_REGISTER: mmio.Mmio(packed struct {
+        \\        TEST_REGISTER: mmio.Mmio(32, packed struct {
         \\            TEST_FIELD: u1,
         \\            padding: u31 = 0,
         \\        }),
@@ -667,7 +749,7 @@ test "peripheral instantiation" {
         \\
         \\pub const types = struct {
         \\    pub const TEST_PERIPHERAL = packed struct {
-        \\        TEST_REGISTER: mmio.Mmio(packed struct {
+        \\        TEST_REGISTER: mmio.Mmio(32, packed struct {
         \\            TEST_FIELD: u1,
         \\            padding: u31 = 0,
         \\        }),
@@ -731,7 +813,7 @@ test "peripherals with a shared type" {
         \\
         \\pub const types = struct {
         \\    pub const TEST_PERIPHERAL = packed struct {
-        \\        TEST_REGISTER: mmio.Mmio(packed struct {
+        \\        TEST_REGISTER: mmio.Mmio(32, packed struct {
         \\            TEST_FIELD: u1,
         \\            padding: u31 = 0,
         \\        }),
@@ -844,18 +926,254 @@ test "peripheral with modes" {
         \\
         \\        TEST_MODE1: packed struct {
         \\            TEST_REGISTER1: u32,
-        \\            COMMON_REGISTER: mmio.Mmio(packed struct {
+        \\            COMMON_REGISTER: mmio.Mmio(32, packed struct {
         \\                TEST_FIELD: u1,
         \\                padding: u31 = 0,
         \\            }),
         \\        },
         \\        TEST_MODE2: packed struct {
         \\            TEST_REGISTER2: u32,
-        \\            COMMON_REGISTER: mmio.Mmio(packed struct {
+        \\            COMMON_REGISTER: mmio.Mmio(32, packed struct {
         \\                TEST_FIELD: u1,
         \\                padding: u31 = 0,
         \\            }),
         \\        },
+        \\    };
+        \\};
+        \\
+    , buffer.items);
+}
+
+test "peripheral with enum" {
+    var db = try Database.init(std.testing.allocator);
+    defer db.deinit();
+
+    var buffer = std.ArrayList(u8).init(std.testing.allocator);
+    defer buffer.deinit();
+
+    const enum_field1_id = db.createEntity();
+    try db.types.enum_fields.put(db.gpa, enum_field1_id, 0);
+    try db.addName(enum_field1_id, "TEST_ENUM_FIELD1");
+
+    const enum_field2_id = db.createEntity();
+    try db.types.enum_fields.put(db.gpa, enum_field2_id, 1);
+    try db.addName(enum_field2_id, "TEST_ENUM_FIELD2");
+
+    const enum_id = db.createEntity();
+    try db.types.enums.put(db.gpa, enum_id, {});
+    try db.addName(enum_id, "TEST_ENUM");
+    try db.addSize(enum_id, 4);
+    try db.addChild("type.enum_field", enum_id, enum_field1_id);
+    try db.addChild("type.enum_field", enum_id, enum_field2_id);
+
+    const register_id = db.createEntity();
+    try db.types.registers.put(db.gpa, register_id, {});
+    try db.addName(register_id, "TEST_REGISTER");
+    try db.addOffset(register_id, 0);
+    try db.addSize(register_id, 8);
+
+    const peripheral_id = db.createEntity();
+    try db.types.peripherals.put(db.gpa, peripheral_id, {});
+    try db.addName(peripheral_id, "TEST_PERIPHERAL");
+    try db.addChild("type.enum", peripheral_id, enum_id);
+    try db.addChild("type.register", peripheral_id, register_id);
+
+    try db.toZig(buffer.writer());
+    try std.testing.expectEqualStrings(
+        \\const mmio = @import("mmio");
+        \\
+        \\pub const types = struct {
+        \\    pub const TEST_PERIPHERAL = packed struct {
+        \\        pub const TEST_ENUM = enum(u4) {
+        \\            TEST_ENUM_FIELD1 = 0x0,
+        \\            TEST_ENUM_FIELD2 = 0x1,
+        \\            _,
+        \\        };
+        \\
+        \\        TEST_REGISTER: u8,
+        \\    };
+        \\};
+        \\
+    , buffer.items);
+}
+
+test "peripheral with enum, enum is exhausted of values" {
+    var db = try Database.init(std.testing.allocator);
+    defer db.deinit();
+
+    var buffer = std.ArrayList(u8).init(std.testing.allocator);
+    defer buffer.deinit();
+
+    const enum_field1_id = db.createEntity();
+    try db.types.enum_fields.put(db.gpa, enum_field1_id, 0);
+    try db.addName(enum_field1_id, "TEST_ENUM_FIELD1");
+
+    const enum_field2_id = db.createEntity();
+    try db.types.enum_fields.put(db.gpa, enum_field2_id, 1);
+    try db.addName(enum_field2_id, "TEST_ENUM_FIELD2");
+
+    const enum_id = db.createEntity();
+    try db.types.enums.put(db.gpa, enum_id, {});
+    try db.addName(enum_id, "TEST_ENUM");
+    try db.addSize(enum_id, 1);
+    try db.addChild("type.enum_field", enum_id, enum_field1_id);
+    try db.addChild("type.enum_field", enum_id, enum_field2_id);
+
+    const register_id = db.createEntity();
+    try db.types.registers.put(db.gpa, register_id, {});
+    try db.addName(register_id, "TEST_REGISTER");
+    try db.addOffset(register_id, 0);
+    try db.addSize(register_id, 8);
+
+    const peripheral_id = db.createEntity();
+    try db.types.peripherals.put(db.gpa, peripheral_id, {});
+    try db.addName(peripheral_id, "TEST_PERIPHERAL");
+    try db.addChild("type.enum", peripheral_id, enum_id);
+    try db.addChild("type.register", peripheral_id, register_id);
+
+    try db.toZig(buffer.writer());
+    try std.testing.expectEqualStrings(
+        \\const mmio = @import("mmio");
+        \\
+        \\pub const types = struct {
+        \\    pub const TEST_PERIPHERAL = packed struct {
+        \\        pub const TEST_ENUM = enum(u1) {
+        \\            TEST_ENUM_FIELD1 = 0x0,
+        \\            TEST_ENUM_FIELD2 = 0x1,
+        \\        };
+        \\
+        \\        TEST_REGISTER: u8,
+        \\    };
+        \\};
+        \\
+    , buffer.items);
+}
+
+test "field with named enum" {
+    var db = try Database.init(std.testing.allocator);
+    defer db.deinit();
+
+    var buffer = std.ArrayList(u8).init(std.testing.allocator);
+    defer buffer.deinit();
+
+    const enum_field1_id = db.createEntity();
+    try db.types.enum_fields.put(db.gpa, enum_field1_id, 0);
+    try db.addName(enum_field1_id, "TEST_ENUM_FIELD1");
+
+    const enum_field2_id = db.createEntity();
+    try db.types.enum_fields.put(db.gpa, enum_field2_id, 1);
+    try db.addName(enum_field2_id, "TEST_ENUM_FIELD2");
+
+    const enum_id = db.createEntity();
+    try db.types.enums.put(db.gpa, enum_id, {});
+    try db.addName(enum_id, "TEST_ENUM");
+    try db.addSize(enum_id, 4);
+    try db.addChild("type.enum_field", enum_id, enum_field1_id);
+    try db.addChild("type.enum_field", enum_id, enum_field2_id);
+
+    const field_id = db.createEntity();
+    try db.types.fields.put(db.gpa, field_id, {});
+    try db.addName(field_id, "TEST_FIELD");
+    try db.addOffset(field_id, 0);
+    try db.addSize(field_id, 4);
+    try db.attrs.enums.put(db.gpa, field_id, enum_id);
+
+    const register_id = db.createEntity();
+    try db.types.registers.put(db.gpa, register_id, {});
+    try db.addName(register_id, "TEST_REGISTER");
+    try db.addOffset(register_id, 0);
+    try db.addSize(register_id, 8);
+    try db.addChild("type.field", register_id, field_id);
+
+    const peripheral_id = db.createEntity();
+    try db.types.peripherals.put(db.gpa, peripheral_id, {});
+    try db.addName(peripheral_id, "TEST_PERIPHERAL");
+    try db.addChild("type.enum", peripheral_id, enum_id);
+    try db.addChild("type.register", peripheral_id, register_id);
+
+    try db.toZig(buffer.writer());
+    try std.testing.expectEqualStrings(
+        \\const mmio = @import("mmio");
+        \\
+        \\pub const types = struct {
+        \\    pub const TEST_PERIPHERAL = packed struct {
+        \\        pub const TEST_ENUM = enum(u4) {
+        \\            TEST_ENUM_FIELD1 = 0x0,
+        \\            TEST_ENUM_FIELD2 = 0x1,
+        \\            _,
+        \\        };
+        \\
+        \\        TEST_REGISTER: mmio.Mmio(8, packed struct {
+        \\            TEST_FIELD: packed union {
+        \\                raw: u4,
+        \\                value: TEST_ENUM,
+        \\            },
+        \\            padding: u4 = 0,
+        \\        }),
+        \\    };
+        \\};
+        \\
+    , buffer.items);
+}
+
+test "field with anonymous enum" {
+    var db = try Database.init(std.testing.allocator);
+    defer db.deinit();
+
+    var buffer = std.ArrayList(u8).init(std.testing.allocator);
+    defer buffer.deinit();
+
+    const enum_field1_id = db.createEntity();
+    try db.types.enum_fields.put(db.gpa, enum_field1_id, 0);
+    try db.addName(enum_field1_id, "TEST_ENUM_FIELD1");
+
+    const enum_field2_id = db.createEntity();
+    try db.types.enum_fields.put(db.gpa, enum_field2_id, 1);
+    try db.addName(enum_field2_id, "TEST_ENUM_FIELD2");
+
+    const enum_id = db.createEntity();
+    try db.types.enums.put(db.gpa, enum_id, {});
+    try db.addSize(enum_id, 4);
+    try db.addChild("type.enum_field", enum_id, enum_field1_id);
+    try db.addChild("type.enum_field", enum_id, enum_field2_id);
+
+    const field_id = db.createEntity();
+    try db.types.fields.put(db.gpa, field_id, {});
+    try db.addName(field_id, "TEST_FIELD");
+    try db.addOffset(field_id, 0);
+    try db.addSize(field_id, 4);
+    try db.attrs.enums.put(db.gpa, field_id, enum_id);
+
+    const register_id = db.createEntity();
+    try db.types.registers.put(db.gpa, register_id, {});
+    try db.addName(register_id, "TEST_REGISTER");
+    try db.addOffset(register_id, 0);
+    try db.addSize(register_id, 8);
+    try db.addChild("type.field", register_id, field_id);
+
+    const peripheral_id = db.createEntity();
+    try db.types.peripherals.put(db.gpa, peripheral_id, {});
+    try db.addName(peripheral_id, "TEST_PERIPHERAL");
+    try db.addChild("type.enum", peripheral_id, enum_id);
+    try db.addChild("type.register", peripheral_id, register_id);
+
+    try db.toZig(buffer.writer());
+    try std.testing.expectEqualStrings(
+        \\const mmio = @import("mmio");
+        \\
+        \\pub const types = struct {
+        \\    pub const TEST_PERIPHERAL = packed struct {
+        \\        TEST_REGISTER: mmio.Mmio(8, packed struct {
+        \\            TEST_FIELD: packed union {
+        \\                raw: u4,
+        \\                value: enum(u4) {
+        \\                    TEST_ENUM_FIELD1 = 0x0,
+        \\                    TEST_ENUM_FIELD2 = 0x1,
+        \\                    _,
+        \\                },
+        \\            },
+        \\            padding: u4 = 0,
+        \\        }),
         \\    };
         \\};
         \\
