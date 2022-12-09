@@ -60,7 +60,7 @@ fn loadDevice(db: *Database, node: xml.Node) !void {
     while (interrupt_it.next()) |interrupt_node|
         try loadInterrupt(db, interrupt_node, id);
 
-    //try patchRegisterGroups(db);
+    try inferEnumSizes(db);
 
     // TODO:
     // address-space.memory-segment
@@ -73,6 +73,71 @@ fn loadDevice(db: *Database, node: xml.Node) !void {
     // parameters.param
 
     // property-groups.property-group.property
+}
+
+// for each enum in the database get its max value, each field that references
+// it, and determine the size of the enum
+fn inferEnumSizes(db: *Database) !void {
+    var enum_it = db.types.enums.iterator();
+    while (enum_it.next()) |entry| {
+        const enum_id = entry.key_ptr.*;
+        inferEnumSize(db, enum_id) catch |err| {
+            log.warn("failed to infer size of enum '{s}': {}", .{
+                db.attrs.names.get(enum_id) orelse "<unknown>",
+                err,
+            });
+        };
+    }
+}
+
+fn inferEnumSize(db: *Database, enum_id: EntityId) !void {
+    const max_value = blk: {
+        const enum_fields = db.children.enum_fields.get(enum_id) orelse return error.MissingEnumFields;
+        var ret: u32 = 0;
+        var it = enum_fields.iterator();
+        while (it.next()) |entry| {
+            const enum_field_id = entry.key_ptr.*;
+            const value = db.types.enum_fields.get(enum_field_id).?;
+            ret = std.math.max(ret, value);
+        }
+
+        break :blk ret;
+    };
+
+    var field_sizes = std.ArrayList(u64).init(db.gpa);
+    defer field_sizes.deinit();
+
+    var it = db.attrs.enums.iterator();
+    while (it.next()) |entry| {
+        const field_id = entry.key_ptr.*;
+        const other_enum_id = entry.value_ptr.*;
+        assert(db.entityIs("type.field", field_id));
+        if (other_enum_id != enum_id)
+            continue;
+
+        const field_size = db.attrs.sizes.get(field_id) orelse continue;
+        try field_sizes.append(field_size);
+    }
+
+    // if all the field sizes are the same, and the max value can fit in there,
+    // then set the size of the enum
+    const size = blk: {
+        var ret: ?u64 = null;
+        for (field_sizes.items) |field_size| {
+            if (ret == null)
+                ret = field_size
+            else if (ret.? != field_size)
+                return error.InconsistentEnumSizes;
+        }
+
+        break :blk ret.?;
+    };
+
+    _ = max_value;
+    //if (try std.math.ceilPowerOfTwo(u32, max_value) > size)
+    //    return error.EnumMaxValueTooBig;
+
+    try db.attrs.sizes.put(db.gpa, enum_id, size);
 }
 
 // TODO: instances use name in module
@@ -129,6 +194,8 @@ fn loadModuleType(db: *Database, node: xml.Node) !void {
         while (register_group_it.next()) |register_group_node|
             try loadRegisterGroup(db, register_group_node, id);
     }
+
+    // TODO: infer peripheral or register group offsets if none are given
     // TODO: interrupt-group
 }
 
@@ -705,6 +772,7 @@ fn loadRegisterGroupInstance(
     if (node.getAttribute("caption")) |caption|
         try db.addDescription(id, caption);
 
+    // size is in bytes
     if (node.getAttribute("size")) |size_str| {
         const size = try std.fmt.parseInt(u64, size_str, 0);
         try db.addSize(id, size);
