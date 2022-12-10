@@ -10,6 +10,107 @@ pub fn loadIntoDb(db: *Database, doc: xml.Doc) !void {
     _ = doc;
 }
 
+// simpleType == string
+// descriptionStringType == string
+// cpuNameType == string
+//   this one is going to be a bit difficult. It's officially just for Cortex-M
+//   and Secure-Cores.
+//
+// revisionType
+//   pattern: r[0-9]*p[0-9]*
+//
+// endianType
+//   enum:
+//     little
+//     big
+//     selectable
+//     other
+//
+// dataTypeType
+//   enum:
+//     uint8_t
+//     uint16_t
+//     uint32_t
+//     uint64_t
+//     int8_t
+//     int16_t
+//     int32_t
+//     int64_t
+//     uint8_t *
+//     uint16_t *
+//     uint32_t *
+//     uint64_t *
+//     int8_t *
+//     int16_t *
+//     int32_t *
+//     int64_t *
+//
+// dimableIdentifierType
+//   pattern: ((%s)|(%s)[_A-Za-z]{1}[_A-Za-z0-9]*)|([_A-Za-z]{1}[_A-Za-z0-9]*(\[%s\])?)|([_A-Za-z]{1}[_A-Za-z0-9]*(%s)?[_A-Za-z0-9]*)
+//
+// identifierType
+//   pattern: [_A-Za-z0-9]*
+//
+// protectionStringType
+//   pattern: [snp]
+//     s == Secure
+//     n == Non-Secure
+//     p == Privileged
+//
+// sauAccessType
+//   pattern: [cn]
+//     c = non-secure Callable / Secure
+//     n = non-secure
+//
+// dimIndexType
+//   pattern: [0-9]+\-[0-9]+|[A-Z]-[A-Z]|[_0-9a-zA-Z]+(,\s*[_0-9a-zA-Z]+)+
+//
+// scaledNonNegativeInteger
+//   pattern: [+]?(0x|0X|#)?[0-9a-fA-F]+[kmgtKMGT]?
+//
+// enumeratedValueDataType
+//   pattern: [+]?(((0x|0X)[0-9a-fA-F]+)|([0-9]+)|((#|0b)[01xX]+))
+//
+// accessType
+//   enum:
+//     read-only
+//     write-only
+//     writeOnce
+//     read-writeOnce
+//
+// modifiedWriteValuesType
+//   enum:
+//     oneToClear
+//     oneToSet
+//     oneToToggle
+//     zeroToClear
+//     zeroToSet
+//     zeroToToggle
+//     clear
+//     set
+//     modify
+//
+// readActionType
+//   enum:
+//     clear
+//     set
+//     modify
+//     modifyExternal
+//
+// enumUsageType
+//   enum:
+//     read
+//     write
+//     read-write
+//
+// bitRangeType
+//   pattern: \[([0-4])?[0-9]:([0-4])?[0-9]\]
+//
+// writeConstraintType
+//
+//
+//
+
 //pub const Device = struct {
 //    vendor: ?[]const u8 = null,
 //    vendor_id: ?[]const u8 = null,
