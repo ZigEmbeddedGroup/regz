@@ -7,9 +7,6 @@ const Database = @import("Database.zig");
 const EntityId = Database.EntityId;
 
 const xml = @import("xml.zig");
-const Peripheral = @import("Peripheral.zig");
-const Register = @import("Register.zig");
-const Field = @import("Field.zig");
 
 const log = std.log.scoped(.atdf);
 

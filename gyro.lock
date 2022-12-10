@@ -1,2 +1,3 @@
 git https://github.com/Hejsil/zig-clap.git master clap.zig 88edafd00ec25dcc01deb8fc69e9864a16f8717c
+git https://github.com/Hejsil/mecha.git master mecha.zig fe2fcf2be3af1ab3f9512be9e1f4a8fe1d349c5a
 git https://github.com/mitchellh/zig-libxml2.git main libxml2.zig 366b26b0137f6815174f2323098792f03dbdee40

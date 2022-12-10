@@ -4,6 +4,11 @@ deps:
       url: "https://github.com/Hejsil/zig-clap.git"
       ref: master
       root: clap.zig
+  mecha:
+    git:
+      url: "https://github.com/Hejsil/mecha.git"
+      ref: master
+      root: mecha.zig
 build_deps:
   libxml2:
     git:

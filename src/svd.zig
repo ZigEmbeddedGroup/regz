@@ -1,9 +1,11 @@
 const std = @import("std");
-const xml = @import("xml.zig");
-const Database = @import("Database.zig");
-
 const ArenaAllocator = std.heap.ArenaAllocator;
 const Allocator = std.mem.Allocator;
+
+const mecha = @import("mecha");
+
+const xml = @import("xml.zig");
+const Database = @import("Database.zig");
 
 pub fn loadIntoDb(db: *Database, doc: xml.Doc) !void {
     _ = db;
