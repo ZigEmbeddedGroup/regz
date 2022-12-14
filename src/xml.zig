@@ -102,6 +102,20 @@ pub const Node = struct {
             .attr = node.impl.properties,
         };
     }
+
+    /// up to you to copy
+    pub fn getValue(node: Node, key: []const u8) ?[:0]const u8 {
+        return if (node.findChild(key)) |child|
+            if (child.impl.children) |value_node|
+                if (@ptrCast(*c.xmlNode, value_node).content) |content|
+                    std.mem.span(content)
+                else
+                    null
+            else
+                null
+        else
+            null;
+    }
 };
 
 pub const Doc = struct {

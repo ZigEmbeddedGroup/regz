@@ -2,116 +2,205 @@ const std = @import("std");
 const ArenaAllocator = std.heap.ArenaAllocator;
 const Allocator = std.mem.Allocator;
 
-const mecha = @import("mecha");
-
 const xml = @import("xml.zig");
 const Database = @import("Database.zig");
+const EntityId = Database.EntityId;
+
+const log = std.log.scoped(.svd);
+
+// svd specific context to hold extra state like derived entities
+const Context = struct {
+    db: *Database,
+    derived_entities: std.AutoArrayHashMap(EntityId, []const u8),
+
+    fn deinit(ctx: *Context) void {
+        ctx.derived_entities.deinit();
+    }
+};
 
 pub fn loadIntoDb(db: *Database, doc: xml.Doc) !void {
-    _ = db;
-    _ = doc;
+    const root = try doc.getRootElement();
+
+    const device_id = db.createEntity();
+    try db.instances.devices.put(db.gpa, device_id, .{});
+
+    const name = root.getValue("name") orelse return error.MissingDeviceName;
+    try db.addName(device_id, name);
+
+    if (root.getValue("description")) |description|
+        try db.addDescription(device_id, description);
+
+    if (root.getValue("licenseText")) |license|
+        try db.addDeviceProperty(device_id, "license", license);
+
+    // vendor
+    // vendorID
+    // series
+    // version
+    // licenseText
+    // headerSystemFilename
+    // headerDefinitionPrefix
+    // addressUnitBits
+    // width
+    // registerPropertiesGroup
+    // peripherals
+    // vendorExtensions
+
+    var cpu_it = root.iterate(&.{}, "cpu");
+    if (cpu_it.next()) |cpu| {
+        const cpu_name = cpu.getValue("name") orelse return error.MissingCpuName;
+        const cpu_revision = cpu.getValue("revision") orelse return error.MissingCpuRevision;
+        const nvic_prio_bits = cpu.getValue("nvicPrioBits") orelse return error.MissingNvicPrioBits;
+        const vendor_systick_config = cpu.getValue("vendorSystickConfig") orelse return error.MissingVendorSystickConfig;
+
+        try db.addDeviceProperty(device_id, "arch", cpu_name);
+        try db.addDeviceProperty(device_id, "cpu.revision", cpu_revision);
+        try db.addDeviceProperty(device_id, "cpu.nvic_prio_bits", nvic_prio_bits);
+        try db.addDeviceProperty(device_id, "cpu.vendor_systick_config", vendor_systick_config);
+
+        if (cpu.getValue("endian")) |endian|
+            try db.addDeviceProperty(device_id, "cpu.endian", endian);
+
+        if (cpu.getValue("mpuPresent")) |mpu|
+            try db.addDeviceProperty(device_id, "cpu.mpu", mpu);
+
+        if (cpu.getValue("fpuPresent")) |fpu|
+            try db.addDeviceProperty(device_id, "cpu.fpu", fpu);
+
+        if (cpu.getValue("dspPresent")) |dsp|
+            try db.addDeviceProperty(device_id, "cpu.dsp", dsp);
+
+        if (cpu.getValue("icachePresent")) |icache|
+            try db.addDeviceProperty(device_id, "cpu.icache", icache);
+
+        if (cpu.getValue("dcachePresent")) |dcache|
+            try db.addDeviceProperty(device_id, "cpu.dcache", dcache);
+
+        if (cpu.getValue("itcmPresent")) |itcm|
+            try db.addDeviceProperty(device_id, "cpu.itcm", itcm);
+
+        if (cpu.getValue("dtcmPresent")) |dtcm|
+            try db.addDeviceProperty(device_id, "cpu.dtcm", dtcm);
+
+        if (cpu.getValue("vtorPresent")) |vtor|
+            try db.addDeviceProperty(device_id, "cpu.vtor", vtor);
+
+        if (cpu.getValue("deviceNumInterrupts")) |num_interrupts|
+            try db.addDeviceProperty(device_id, "cpu.num_interrupts", num_interrupts);
+
+        // fpuDP
+        // sauNumRegions
+        // sauRegionsConfig
+    }
+
+    if (cpu_it.next() != null)
+        log.warn("there are multiple CPUs", .{});
+
+    var ctx = Context{
+        .db = db,
+    };
+
+    var peripheral_it = root.iterate(&.{"peripherals"}, "peripheral");
+    while (peripheral_it.next()) |peripheral_node|
+        try loadPeripheral(&ctx, peripheral_node);
+
+    db.assertValid();
 }
 
-// simpleType == string
-// descriptionStringType == string
-// cpuNameType == string
-//   this one is going to be a bit difficult. It's officially just for Cortex-M
-//   and Secure-Cores.
-//
-// revisionType
-//   pattern: r[0-9]*p[0-9]*
-//
-// endianType
-//   enum:
-//     little
-//     big
-//     selectable
-//     other
-//
-// dataTypeType
-//   enum:
-//     uint8_t
-//     uint16_t
-//     uint32_t
-//     uint64_t
-//     int8_t
-//     int16_t
-//     int32_t
-//     int64_t
-//     uint8_t *
-//     uint16_t *
-//     uint32_t *
-//     uint64_t *
-//     int8_t *
-//     int16_t *
-//     int32_t *
-//     int64_t *
-//
-// dimableIdentifierType
-//   pattern: ((%s)|(%s)[_A-Za-z]{1}[_A-Za-z0-9]*)|([_A-Za-z]{1}[_A-Za-z0-9]*(\[%s\])?)|([_A-Za-z]{1}[_A-Za-z0-9]*(%s)?[_A-Za-z0-9]*)
-//
-// identifierType
-//   pattern: [_A-Za-z0-9]*
-//
-// protectionStringType
-//   pattern: [snp]
-//     s == Secure
-//     n == Non-Secure
-//     p == Privileged
-//
-// sauAccessType
-//   pattern: [cn]
-//     c = non-secure Callable / Secure
-//     n = non-secure
-//
-// dimIndexType
-//   pattern: [0-9]+\-[0-9]+|[A-Z]-[A-Z]|[_0-9a-zA-Z]+(,\s*[_0-9a-zA-Z]+)+
-//
-// scaledNonNegativeInteger
-//   pattern: [+]?(0x|0X|#)?[0-9a-fA-F]+[kmgtKMGT]?
-//
-// enumeratedValueDataType
-//   pattern: [+]?(((0x|0X)[0-9a-fA-F]+)|([0-9]+)|((#|0b)[01xX]+))
-//
-// accessType
-//   enum:
-//     read-only
-//     write-only
-//     writeOnce
-//     read-writeOnce
-//
-// modifiedWriteValuesType
-//   enum:
-//     oneToClear
-//     oneToSet
-//     oneToToggle
-//     zeroToClear
-//     zeroToSet
-//     zeroToToggle
-//     clear
-//     set
-//     modify
-//
-// readActionType
-//   enum:
-//     clear
-//     set
-//     modify
-//     modifyExternal
-//
-// enumUsageType
-//   enum:
-//     read
-//     write
-//     read-write
-//
-// bitRangeType
-//   pattern: \[([0-4])?[0-9]:([0-4])?[0-9]\]
-//
-// writeConstraintType
-//
-//
-//
+pub fn loadPeripheral(ctx: *Context, node: xml.Node) !void {
+    const db = ctx.db;
+    _ = db;
+    _ = node;
+
+    // dimElementGroup
+    // name
+    // version
+    // description
+    // alternatePeripheral
+    // groupName
+    // prependToName
+    // appendToName
+    // headerStructName
+    // disableCondition
+    // baseAddress
+    // registerPropertiesGroup
+    // addressBlock
+    // interrupt
+    // registers
+    //
+    // attribute: derivedFrom
+}
+
+pub const Revision = struct {
+    release: u64,
+    part: u64,
+
+    fn parse(str: []const u8) !Revision {
+        if (!std.mem.startsWith(u8, str, "r"))
+            return error.Malformed;
+
+        const p_index = std.mem.indexOf(u8, str, "p") orelse return error.Malformed;
+        return Revision{
+            .release = try std.fmt.parseInt(u64, str[1..p_index], 10),
+            .part = try std.fmt.parseInt(u64, str[p_index + 1 ..], 10),
+        };
+    }
+};
+
+pub const Endian = enum { little, big, selectable, other };
+
+pub const DataType = enum {
+    uint8_t,
+    uint16_t,
+    uint32_t,
+    uint64_t,
+    int8_t,
+    int16_t,
+    int32_t,
+    int64_t,
+    @"uint8_t *",
+    @"uint16_t *",
+    @"uint32_t *",
+    @"uint64_t *",
+    @"int8_t *",
+    @"int16_t *",
+    @"int32_t *",
+    @"int64_t *",
+};
+
+/// pattern: ((%s)|(%s)[_A-Za-z]{1}[_A-Za-z0-9]*)|([_A-Za-z]{1}[_A-Za-z0-9]*(\[%s\])?)|([_A-Za-z]{1}[_A-Za-z0-9]*(%s)?[_A-Za-z0-9]*)
+///
+/// The dimable identifier optionally has a %s to format where the id should
+/// go, it may also be surrounded by []
+pub const DimableIdentifier = struct {
+    name: []const u8,
+    pos: u32,
+};
+
+/// pattern: [0-9]+\-[0-9]+|[A-Z]-[A-Z]|[_0-9a-zA-Z]+(,\s*[_0-9a-zA-Z]+)+
+pub const DimIndex = struct {};
+
+const testing = std.testing;
+const expectEqual = testing.expectEqual;
+const expectError = testing.expectError;
+
+test "Revision.parse" {
+    try expectEqual(Revision{
+        .release = 1,
+        .part = 2,
+    }, try Revision.parse("r1p2"));
+
+    try expectEqual(Revision{
+        .release = 50,
+        .part = 100,
+    }, try Revision.parse("r50p100"));
+
+    try expectError(error.Malformed, Revision.parse("p"));
+    try expectError(error.Malformed, Revision.parse("r"));
+    try expectError(error.InvalidCharacter, Revision.parse("rp"));
+    try expectError(error.InvalidCharacter, Revision.parse("r1p"));
+    try expectError(error.InvalidCharacter, Revision.parse("rp2"));
+}
 
 //pub const Device = struct {
 //    vendor: ?[]const u8 = null,

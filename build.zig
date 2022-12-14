@@ -48,6 +48,7 @@ pub const Regz = struct {
         exe.setBuildMode(mode);
         exe.addOptions("build_options", build_options);
         exe.addPackagePath("clap", comptime root() ++ pkgs.clap.source.path);
+        exe.addPackagePath("mecha", comptime root() ++ pkgs.mecha.source.path);
         xml.link(exe);
 
         var regz = builder.allocator.create(Regz) catch unreachable;
@@ -135,6 +136,7 @@ pub fn build(b: *std.build.Builder) !void {
     tests.addOptions("build_options", regz.build_options);
     tests.addPackagePath("xml", "src/xml.zig");
     tests.addPackagePath("Database", "src/Database.zig");
+    pkgs.addAllTo(tests);
     regz.xml.link(tests);
 
     const test_step = b.step("test", "Run unit tests");
