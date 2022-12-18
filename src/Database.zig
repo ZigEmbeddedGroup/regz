@@ -62,6 +62,8 @@ attrs: struct {
 
     // a field type might have an enum type
     enums: HashMap(EntityId, EntityId) = .{},
+
+    parents: HashMap(EntityId, EntityId) = .{},
 } = .{},
 
 children: struct {
@@ -91,8 +93,8 @@ instances: struct {
     devices: ArrayHashMap(EntityId, Device) = .{},
     interrupts: ArrayHashMap(EntityId, i32) = .{},
     peripherals: ArrayHashMap(EntityId, EntityId) = .{},
-    register_groups: ArrayHashMap(EntityId, EntityId) = .{},
-    registers: ArrayHashMap(EntityId, EntityId) = .{},
+    //register_groups: ArrayHashMap(EntityId, EntityId) = .{},
+    //registers: ArrayHashMap(EntityId, EntityId) = .{},
 } = .{},
 
 // to speed up lookups
@@ -118,6 +120,7 @@ pub fn deinit(db: *Database) void {
     db.attrs.reset_masks.deinit(db.gpa);
     db.attrs.versions.deinit(db.gpa);
     db.attrs.enums.deinit(db.gpa);
+    db.attrs.parents.deinit(db.gpa);
     deinitMapAndValues(db.gpa, &db.attrs.modes);
 
     // children
@@ -143,8 +146,8 @@ pub fn deinit(db: *Database) void {
     deinitMapAndValues(db.gpa, &db.instances.devices);
     db.instances.interrupts.deinit(db.gpa);
     db.instances.peripherals.deinit(db.gpa);
-    db.instances.register_groups.deinit(db.gpa);
-    db.instances.registers.deinit(db.gpa);
+    //db.instances.register_groups.deinit(db.gpa);
+    //db.instances.registers.deinit(db.gpa);
 
     // indexes
 
@@ -272,6 +275,7 @@ pub fn addChild(
         result.value_ptr.* = .{};
 
     try result.value_ptr.put(db.gpa, child_id, {});
+    try db.attrs.parents.putNoClobber(db.gpa, child_id, parent_id);
 }
 
 pub fn addDeviceProperty(
@@ -308,10 +312,16 @@ pub fn getEntityIdByName(
     comptime entity_location: []const u8,
     name: []const u8,
 ) !EntityId {
-    var it = db.attrs.names.iterator();
+    comptime var tok_it = std.mem.tokenize(u8, entity_location, ".");
+    // the tables are in plural form but "type.peripheral" feels better to me
+    // for calling this function
+    comptime var group = (tok_it.next() orelse unreachable) ++ "s";
+    comptime var table = (tok_it.next() orelse unreachable) ++ "s";
+
+    var it = @field(@field(db, group), table).iterator();
     return while (it.next()) |entry| {
         const entry_id = entry.key_ptr.*;
-        const entry_name = entry.value_ptr.*;
+        const entry_name = db.attrs.names.get(entry_id) orelse continue;
         if (std.mem.eql(u8, name, entry_name)) {
             assert(db.entityIs(entity_location, entry_id));
             return entry_id;

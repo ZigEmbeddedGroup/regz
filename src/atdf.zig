@@ -60,6 +60,7 @@ fn loadDevice(db: *Database, node: xml.Node) !void {
     while (interrupt_it.next()) |interrupt_node|
         try loadInterrupt(db, interrupt_node, id);
 
+    try inferPeripheralOffsets(db);
     try inferEnumSizes(db);
 
     // TODO:
@@ -73,6 +74,67 @@ fn loadDevice(db: *Database, node: xml.Node) !void {
     // parameters.param
 
     // property-groups.property-group.property
+}
+
+// This function is intended to normalize the struct layout of some peripheral
+// instances. Like in ATmega328P there will be register groups with offset of 0
+// and then the registers themselves have their absolute offset. We'd like to
+// make it easier to dedupe generated types, so this will move the offset of
+// the register group to the beginning of its registers (and adjust registers
+// accordingly). This should make it easier to determine what register groups
+// might be of the same "type".
+fn inferPeripheralOffsets(db: *Database) !void {
+    // only infer the peripheral offset if there is only one instance for a given type.
+    var type_counts = std.AutoArrayHashMap(EntityId, struct { count: usize, instance_id: EntityId }).init(db.gpa);
+    defer type_counts.deinit();
+
+    var instance_it = db.instances.peripherals.iterator();
+    while (instance_it.next()) |instance_entry| {
+        const instance_id = instance_entry.key_ptr.*;
+        const type_id = instance_entry.value_ptr.*;
+        if (type_counts.getEntry(type_id)) |entry|
+            entry.value_ptr.count += 1
+        else
+            try type_counts.put(type_id, .{
+                .count = 1,
+                .instance_id = instance_id,
+            });
+    }
+
+    var type_it = type_counts.iterator();
+    while (type_it.next()) |type_entry| if (type_entry.value_ptr.count == 1) {
+        const type_id = type_entry.key_ptr.*;
+        const instance_id = type_entry.value_ptr.instance_id;
+        try inferPeripheralOffset(db, type_id, instance_id);
+    };
+}
+
+fn inferPeripheralOffset(db: *Database, type_id: EntityId, instance_id: EntityId) !void {
+    // TODO: assert that there's only one instance using this type
+
+    var min_offset: ?u64 = null;
+    // first find the min offset of all the registers for this peripheral
+    const register_set = db.children.registers.get(type_id) orelse return;
+    var register_it = register_set.iterator();
+    while (register_it.next()) |register_entry| {
+        const register_id = register_entry.key_ptr.*;
+        const offset = db.attrs.offsets.get(register_id) orelse continue;
+
+        if (min_offset == null)
+            min_offset = offset
+        else
+            min_offset = std.math.min(min_offset.?, offset);
+    }
+
+    const instance_offset: u64 = db.attrs.offsets.get(instance_id) orelse 0;
+    try db.attrs.offsets.put(db.gpa, instance_id, instance_offset + min_offset.?);
+
+    register_it = register_set.iterator();
+    while (register_it.next()) |register_entry| {
+        const register_id = register_entry.key_ptr.*;
+        if (db.attrs.offsets.getEntry(register_id)) |offset_entry|
+            offset_entry.value_ptr.* -= min_offset.?;
+    }
 }
 
 // for each enum in the database get its max value, each field that references
@@ -120,8 +182,14 @@ fn inferEnumSize(db: *Database, enum_id: EntityId) !void {
     }
 
     // if all the field sizes are the same, and the max value can fit in there,
-    // then set the size of the enum
-    const size = blk: {
+    // then set the size of the enum. If there are no usages of an enum, then
+    // assign it the smallest value possible
+    const size = if (field_sizes.items.len == 0)
+        if (max_value == 0)
+            1
+        else
+            try std.math.ceilPowerOfTwo(u64, max_value)
+    else blk: {
         var ret: ?u64 = null;
         for (field_sizes.items) |field_size| {
             if (ret == null)
@@ -133,7 +201,6 @@ fn inferEnumSize(db: *Database, enum_id: EntityId) !void {
         break :blk ret.?;
     };
 
-    _ = max_value;
     //if (try std.math.ceilPowerOfTwo(u32, max_value) > size)
     //    return error.EnumMaxValueTooBig;
 
@@ -195,7 +262,6 @@ fn loadModuleType(db: *Database, node: xml.Node) !void {
             try loadRegisterGroup(db, register_group_node, id);
     }
 
-    // TODO: infer peripheral or register group offsets if none are given
     // TODO: interrupt-group
 }
 
@@ -678,6 +744,11 @@ fn loadModuleInstances(
         try loadModuleInstance(db, instance_node, device_id, type_id);
 }
 
+fn peripheralIsInlined(db: Database, id: EntityId) bool {
+    assert(db.entityIs("type.peripheral", id));
+    return db.children.register_groups.get(id) == null;
+}
+
 fn loadModuleInstance(
     db: *Database,
     node: xml.Node,
@@ -692,6 +763,21 @@ fn loadModuleInstance(
         "caption",
     });
 
+    // register-group never has an offset in a module, so we can safely assume
+    // that they're used as variants of a peripheral, and never used like
+    // clusters in SVD.
+    return if (peripheralIsInlined(db.*, peripheral_type_id))
+        loadModuleInstanceFromPeripheral(db, node, device_id, peripheral_type_id)
+    else
+        loadModuleInstanceFromRegisterGroup(db, node, device_id, peripheral_type_id);
+}
+
+fn loadModuleInstanceFromPeripheral(
+    db: *Database,
+    node: xml.Node,
+    device_id: EntityId,
+    peripheral_type_id: EntityId,
+) !void {
     const id = db.createEntity();
     errdefer db.destroyEntity(id);
 
@@ -699,17 +785,21 @@ fn loadModuleInstance(
     const name = node.getAttribute("name") orelse return error.MissingInstanceName;
     try db.instances.peripherals.put(db.gpa, id, peripheral_type_id);
     try db.addName(id, name);
+    if (node.getAttribute("caption")) |description|
+        try db.addDescription(id, description);
+
     if (getInlinedRegisterGroup(node, name)) |register_group_node| {
         log.debug("{}: inlining", .{id});
         const offset_str = register_group_node.getAttribute("offset") orelse return error.MissingPeripheralOffset;
         const offset = try std.fmt.parseInt(u64, offset_str, 0);
         try db.addOffset(id, offset);
     } else {
-        var register_group_it = node.iterate(&.{}, "register-group");
-        while (register_group_it.next()) |register_group_node|
-            loadRegisterGroupInstance(db, register_group_node, id, peripheral_type_id) catch {
-                log.warn("skipping register group instance in {s}", .{name});
-            };
+        unreachable;
+        //var register_group_it = node.iterate(&.{}, "register-group");
+        //while (register_group_it.next()) |register_group_node|
+        //    loadRegisterGroupInstance(db, register_group_node, id, peripheral_type_id) catch {
+        //        log.warn("skipping register group instance in {s}", .{name});
+        //    };
     }
 
     var signal_it = node.iterate(&.{"signals"}, "signal");
@@ -717,10 +807,51 @@ fn loadModuleInstance(
         try loadSignal(db, signal_node, id);
 
     try db.addChild("instance.peripheral", device_id, id);
+}
 
-    // TODO:
-    // clock-groups.clock-group.clock
-    // parameters.param
+fn loadModuleInstanceFromRegisterGroup(
+    db: *Database,
+    node: xml.Node,
+    device_id: EntityId,
+    peripheral_type_id: EntityId,
+) !void {
+    const register_group_node = blk: {
+        var it = node.iterate(&.{}, "register-group");
+        const ret = it.next() orelse return error.MissingInstanceRegisterGroup;
+        if (it.next() != null) {
+            return error.TodoInstanceWithMultipleRegisterGroups;
+        }
+
+        break :blk ret;
+    };
+
+    const name = node.getAttribute("name") orelse return error.MissingInstanceName;
+    const name_in_module = register_group_node.getAttribute("name-in-module") orelse return error.MissingNameInModule;
+    const register_group_id = blk: {
+        const register_group_set = db.children.register_groups.get(peripheral_type_id) orelse return error.MissingRegisterGroup;
+        var it = register_group_set.iterator();
+        break :blk while (it.next()) |entry| {
+            const register_group_id = entry.key_ptr.*;
+            const register_group_name = db.attrs.names.get(register_group_id) orelse continue;
+            if (std.mem.eql(u8, name_in_module, register_group_name))
+                break register_group_id;
+        } else return error.MissingRegisterGroup;
+    };
+
+    const id = db.createEntity();
+    errdefer db.destroyEntity(id);
+
+    const offset_str = register_group_node.getAttribute("offset") orelse return error.MissingOffset;
+    const offset = try std.fmt.parseInt(u64, offset_str, 0);
+
+    try db.instances.peripherals.put(db.gpa, id, register_group_id);
+    try db.addName(id, name);
+    try db.addOffset(id, offset);
+
+    if (node.getAttribute("caption")) |description|
+        try db.addDescription(id, description);
+
+    try db.addChild("instance.peripheral", device_id, id);
 }
 
 fn loadRegisterGroupInstance(
@@ -863,8 +994,6 @@ const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectEqualStrings = std.testing.expectEqualStrings;
 
-// NOTE TO SELF:
-// you need to write some tests to ensure bitfields are being parsed correctly
 test "register with bitfields and enum" {
     const text =
         \\<avr-tools-device-file>
@@ -1091,15 +1220,117 @@ test "register with mode" {
     try expect(peripheral_modes.contains(mode_id));
 }
 
-test "instance without offset" {
+test "instance of register group" {
     const text =
         \\<avr-tools-device-file>
+        \\  <devices>
+        \\    <device name="ATmega328P" architecture="AVR8" family="megaAVR">
+        \\      <peripherals>
+        \\        <module name="PORT">
+        \\          <instance name="PORTB" caption="I/O Port">
+        \\            <register-group name="PORTB"
+        \\                            name-in-module="PORTB"
+        \\                            offset="0x00"
+        \\                            address-space="data"
+        \\                            caption="I/O Port"/>
+        \\          </instance>
+        \\          <instance name="PORTC" caption="I/O Port">
+        \\            <register-group name="PORTC"
+        \\                            name-in-module="PORTC"
+        \\                            offset="0x00"
+        \\                            address-space="data"
+        \\                            caption="I/O Port"/>
+        \\          </instance>
+        \\        </module>
+        \\      </peripherals>
+        \\    </device>
+        \\  </devices>
         \\  <modules>
+        \\    <module caption="I/O Port" name="PORT">
+        \\      <register-group caption="I/O Port" name="PORTB">
+        \\        <register caption="Port B Data Register"
+        \\                  name="PORTB"
+        \\                  offset="0x25"
+        \\                  size="1"
+        \\                  mask="0xFF"/>
+        \\        <register caption="Port B Data Direction Register"
+        \\                  name="DDRB"
+        \\                  offset="0x24"
+        \\                  size="1"
+        \\                  mask="0xFF"/>
+        \\        <register caption="Port B Input Pins"
+        \\                  name="PINB"
+        \\                  offset="0x23"
+        \\                  size="1"
+        \\                  mask="0xFF"
+        \\                  ocd-rw="R"/>
+        \\      </register-group>
+        \\      <register-group caption="I/O Port" name="PORTC">
+        \\        <register caption="Port C Data Register"
+        \\                  name="PORTC"
+        \\                  offset="0x28"
+        \\                  size="1"
+        \\                  mask="0x7F"/>
+        \\        <register caption="Port C Data Direction Register"
+        \\                  name="DDRC"
+        \\                  offset="0x27"
+        \\                  size="1"
+        \\                  mask="0x7F"/>
+        \\        <register caption="Port C Input Pins"
+        \\                  name="PINC"
+        \\                  offset="0x26"
+        \\                  size="1"
+        \\                  mask="0x7F"
+        \\                  ocd-rw="R"/>
+        \\      </register-group>
+        \\      <register-group caption="I/O Port" name="PORTD">
+        \\        <register caption="Port D Data Register"
+        \\                  name="PORTD"
+        \\                  offset="0x2B"
+        \\                  size="1"
+        \\                  mask="0xFF"/>
+        \\        <register caption="Port D Data Direction Register"
+        \\                  name="DDRD"
+        \\                  offset="0x2A"
+        \\                  size="1"
+        \\                  mask="0xFF"/>
+        \\        <register caption="Port D Input Pins"
+        \\                  name="PIND"
+        \\                  offset="0x29"
+        \\                  size="1"
+        \\                  mask="0xFF"
+        \\                  ocd-rw="R"/>
+        \\      </register-group>
+        \\    </module>
         \\  </modules>
         \\</avr-tools-device-file>
         \\
     ;
-    _ = text;
-    // TODO: register group lacking an offset (make offset the smallest register
-    // value and fix offsets of children
+
+    var doc = try xml.Doc.fromMemory(text);
+    var db = try Database.initFromAtdf(std.testing.allocator, doc);
+    defer db.deinit();
+
+    try expectEqual(@as(usize, 9), db.types.registers.count());
+    try expectEqual(@as(usize, 1), db.types.peripherals.count());
+    try expectEqual(@as(usize, 3), db.types.register_groups.count());
+    try expectEqual(@as(usize, 2), db.instances.peripherals.count());
+    try expectEqual(@as(usize, 1), db.instances.devices.count());
+
+    const portb_instance_id = try db.getEntityIdByName("instance.peripheral", "PORTB");
+    try expect(db.attrs.offsets.contains(portb_instance_id));
+    try expectEqual(@as(u64, 0x23), db.attrs.offsets.get(portb_instance_id).?);
+
+    // Register assertions
+    const portb_id = try db.getEntityIdByName("type.register", "PORTB");
+    try expect(db.attrs.offsets.contains(portb_id));
+    try expectEqual(@as(u64, 0x2), db.attrs.offsets.get(portb_id).?);
+
+    const ddrb_id = try db.getEntityIdByName("type.register", "DDRB");
+    try expect(db.attrs.offsets.contains(ddrb_id));
+    try expectEqual(@as(u64, 0x1), db.attrs.offsets.get(ddrb_id).?);
+
+    const pinb_id = try db.getEntityIdByName("type.register", "PINB");
+    try expect(db.attrs.offsets.contains(pinb_id));
+    try expectEqual(@as(u64, 0x0), db.attrs.offsets.get(pinb_id).?);
 }

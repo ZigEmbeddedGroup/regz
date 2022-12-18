@@ -124,14 +124,46 @@ fn writeDevice(db: Database, device_id: EntityId, out_writer: anytype) !void {
     try out_writer.writeAll(buffer.items);
 }
 
+// generates a string for a type in the `types` namespace of the generated
+// code. Since this is only used in code generation, just going to stuff it in
+// the arena allocator
+fn typesReference(db: Database, type_id: EntityId) ![]const u8 {
+    // TODO: assert type_id is a type
+    var full_name_components = std.ArrayList([]const u8).init(db.gpa);
+    defer full_name_components.deinit();
+
+    var id = type_id;
+    while (true) {
+        if (db.attrs.names.get(id)) |next_name|
+            try full_name_components.insert(0, next_name)
+        else
+            return error.MissingTypeName;
+
+        if (db.attrs.parents.get(id)) |parent_id|
+            id = parent_id
+        else
+            break;
+    }
+
+    if (full_name_components.items.len == 0)
+        return error.CantReference;
+
+    var full_name = std.ArrayList(u8).init(db.arena.allocator());
+    const writer = full_name.writer();
+    try writer.writeAll("types");
+    for (full_name_components.items) |component|
+        try writer.print(".{s}", .{
+            std.zig.fmtId(component),
+        });
+
+    return full_name.toOwnedSlice();
+}
+
 fn writePeripheralInstance(db: Database, peripheral_id: EntityId, offset: u64, out_writer: anytype) !void {
     assert(db.entityIs("instance.peripheral", peripheral_id));
     const name = db.attrs.names.get(peripheral_id) orelse return error.MissingPeripheralInstanceName;
     const type_id = db.instances.peripherals.get(peripheral_id).?;
-    const type_name = if (db.attrs.names.get(type_id)) |type_name|
-        type_name
-    else
-        return error.MissingPeripheralInstanceType;
+    const type_ref = try typesReference(db, type_id);
 
     var buffer = std.ArrayList(u8).init(db.arena.allocator());
     defer buffer.deinit();
@@ -142,9 +174,9 @@ fn writePeripheralInstance(db: Database, peripheral_id: EntityId, offset: u64, o
     else if (db.attrs.descriptions.get(type_id)) |description|
         try writer.print("\n/// {s}\n", .{description});
 
-    try writer.print("pub const {s} = @ptrCast(*volatile types.{s}, 0x{x});\n", .{
+    try writer.print("pub const {s} = @ptrCast(*volatile {s}, 0x{x});\n", .{
         std.zig.fmtId(name),
-        std.zig.fmtId(type_name),
+        type_ref,
         offset,
     });
 
@@ -173,31 +205,43 @@ fn writeTypes(db: Database, writer: anytype) !void {
     try writer.writeAll("};\n");
 }
 
+// a peripheral is zero sized if it doesn't have any registers, and if none of
+// its register groups have an offset
+fn isPeripheralZeroSized(db: Database, peripheral_id: EntityId) bool {
+    if (db.children.registers.contains(peripheral_id))
+        return false;
+
+    return if (db.children.register_groups.get(peripheral_id)) |register_group_set| blk: {
+        var it = register_group_set.iterator();
+        while (it.next()) |entry| {
+            const register_group_id = entry.key_ptr.*;
+            if (db.attrs.offsets.contains(register_group_id))
+                break :blk false;
+        }
+
+        break :blk true;
+    } else true;
+}
+
 fn writePeripheral(db: Database, peripheral_id: EntityId, out_writer: anytype) !void {
-    assert(db.entityIs("type.peripheral", peripheral_id));
+    assert(db.entityIs("type.peripheral", peripheral_id) or
+        db.entityIs("type.register_group", peripheral_id));
 
     // unnamed peripherals are anonymously defined
     const name = db.attrs.names.get(peripheral_id) orelse return;
 
     // for now only serialize flat peripherals with no register groups
     // TODO: expand this
-    if (db.children.register_groups.contains(peripheral_id)) {
-        log.warn("TODO: implement register groups in peripheral type ({s})", .{name});
-        return;
+    if (db.children.register_groups.get(peripheral_id)) |register_group_set| {
+        var it = register_group_set.iterator();
+        while (it.next()) |entry| {
+            if (db.attrs.offsets.contains(entry.key_ptr.*)) {
+                log.warn("TODO: implement register groups with offset in peripheral type ({s})", .{name});
+                return;
+            }
+        }
     }
 
-    if (db.children.modes.contains(peripheral_id))
-        try writePeripheralWithModes(db, peripheral_id, name, out_writer)
-    else
-        try writePeripheralNoModes(db, peripheral_id, name, out_writer);
-}
-
-fn writePeripheralNoModes(
-    db: Database,
-    peripheral_id: EntityId,
-    name: []const u8,
-    out_writer: anytype,
-) !void {
     var buffer = std.ArrayList(u8).init(db.arena.allocator());
     defer buffer.deinit();
 
@@ -205,70 +249,66 @@ fn writePeripheralNoModes(
     defer registers.deinit();
 
     const writer = buffer.writer();
+
     try writer.writeByte('\n');
     if (db.attrs.descriptions.get(peripheral_id)) |description|
         try writer.print("/// {s}\n", .{description});
 
+    const zero_sized = isPeripheralZeroSized(db, peripheral_id);
+    const has_modes = db.children.modes.contains(peripheral_id);
     try writer.print(
-        \\pub const {s} = packed struct {{
+        \\pub const {s} = {s} {s} {{
         \\
-    , .{std.zig.fmtId(name)});
+    , .{
+        std.zig.fmtId(name),
+        if (zero_sized) "" else "packed",
+        if (has_modes) "union" else "struct",
+    });
 
-    if (db.children.enums.get(peripheral_id)) |enum_set| {
-        try writeEnums(db, enum_set, writer);
-        try writer.writeByte('\n');
+    var written = false;
+    if (db.children.modes.get(peripheral_id)) |mode_set| {
+        try writeNewlineIfWritten(writer, &written);
+        try writeModeEnumAndFn(db, name, mode_set, writer);
     }
 
-    try writeRegisters(db, peripheral_id, registers.items, writer);
-    try writer.writeAll("};\n");
-
-    try out_writer.writeAll(buffer.items);
-}
-
-fn writePeripheralWithModes(
-    db: Database,
-    peripheral_id: EntityId,
-    name: []const u8,
-    out_writer: anytype,
-) !void {
-    var buffer = std.ArrayList(u8).init(db.arena.allocator());
-    defer buffer.deinit();
-
-    assert(db.children.modes.contains(peripheral_id));
-    var registers = try getOrderedRegisterList(db, peripheral_id);
-    defer registers.deinit();
-
-    var modes = std.AutoArrayHashMap(EntityId, EntitySet).init(db.gpa);
-    defer modes.deinit();
-
-    const mode_set = db.children.modes.get(peripheral_id) orelse unreachable;
-    var it = mode_set.iterator();
-    while (it.next()) |entry| {
-        const mode_id = entry.key_ptr.*;
-        try modes.putNoClobber(mode_id, .{});
-    }
-
-    const writer = buffer.writer();
-    try writer.writeByte('\n');
-    if (db.attrs.descriptions.get(peripheral_id)) |description|
-        try writer.print("/// {s}\n", .{description});
-
-    try writer.print("pub const {s} = packed union {{\n", .{std.zig.fmtId(name)});
-    try writeModeEnumAndFn(db, name, mode_set, writer);
     if (db.children.enums.get(peripheral_id)) |enum_set|
-        try writeEnums(db, enum_set, writer);
+        try writeEnums(db, &written, enum_set, writer);
 
-    try writer.writeByte('\n');
-    try writeRegistersWithModes(db, peripheral_id, mode_set, registers, writer);
+    // namespaced registers
+    if (db.children.register_groups.get(peripheral_id)) |register_group_set| {
+        var it = register_group_set.iterator();
+        while (it.next()) |entry| {
+            const register_group_id = entry.key_ptr.*;
+
+            // a register group with an offset means that it has a location within the peripheral
+            if (db.attrs.offsets.contains(register_group_id))
+                continue;
+
+            try writeNewlineIfWritten(writer, &written);
+            try writePeripheral(db, register_group_id, writer);
+        }
+    }
+
+    try writeNewlineIfWritten(writer, &written);
+    try writeRegisters(db, peripheral_id, writer);
     try writer.writeAll("};\n");
 
     try out_writer.writeAll(buffer.items);
 }
 
-fn writeEnums(db: Database, enum_set: EntitySet, writer: anytype) !void {
+fn writeNewlineIfWritten(writer: anytype, written: *bool) !void {
+    if (written.*)
+        try writer.writeByte('\n')
+    else
+        written.* = true;
+}
+
+fn writeEnums(db: Database, written: *bool, enum_set: EntitySet, writer: anytype) !void {
     var it = enum_set.iterator();
     while (it.next()) |entry| {
         const enum_id = entry.key_ptr.*;
+
+        try writeNewlineIfWritten(writer, written);
         try writeEnum(db, enum_id, writer);
     }
 }
@@ -400,6 +440,16 @@ fn writeModeEnumAndFn(
     try out_writer.writeAll(buffer.items);
 }
 
+fn writeRegisters(db: Database, parent_id: EntityId, out_writer: anytype) !void {
+    var registers = try getOrderedRegisterList(db, parent_id);
+    defer registers.deinit();
+
+    if (db.children.modes.get(parent_id)) |modes|
+        try writeRegistersWithModes(db, parent_id, modes, registers, out_writer)
+    else
+        try writeRegistersBase(db, parent_id, registers.items, out_writer);
+}
+
 fn writeRegistersWithModes(
     db: Database,
     parent_id: EntityId,
@@ -435,14 +485,14 @@ fn writeRegistersWithModes(
             std.zig.fmtId(mode_name),
         });
 
-        try writeRegisters(db, parent_id, moded_registers.items, writer);
+        try writeRegistersBase(db, parent_id, moded_registers.items, writer);
         try writer.writeAll("},\n");
     }
 
     try out_writer.writeAll(buffer.items);
 }
 
-fn writeRegisters(
+fn writeRegistersBase(
     db: Database,
     parent_id: EntityId,
     registers: []const EntityWithOffset,
@@ -655,32 +705,79 @@ fn getOrderedRegisterList(
             const offset = db.attrs.offsets.get(register_id) orelse continue;
             try registers.append(.{ .id = register_id, .offset = offset });
         }
-    } else log.warn("{}: has no registers", .{parent_id});
+    }
 
     std.sort.sort(EntityWithOffset, registers.items, {}, EntityWithOffset.lessThan);
     return registers;
+}
+
+// Test helpers
+// ============
+fn createRegister(db: *Database, name: []const u8, size: u64, offset: u64) !EntityId {
+    const id = db.createEntity();
+    try db.types.registers.put(db.gpa, id, {});
+    try db.addName(id, name);
+    try db.addOffset(id, offset);
+    try db.addSize(id, size);
+
+    return id;
+}
+
+fn createRegisterGroup(db: *Database, name: []const u8) !EntityId {
+    const id = db.createEntity();
+    try db.types.register_groups.put(db.gpa, id, {});
+    try db.addName(id, name);
+
+    return id;
+}
+
+fn createPeripheral(db: *Database, name: []const u8) !EntityId {
+    const id = db.createEntity();
+    try db.types.peripherals.put(db.gpa, id, {});
+    try db.addName(id, name);
+
+    return id;
+}
+
+fn createPeripheralInstance(
+    db: *Database,
+    name: []const u8,
+    type_id: EntityId,
+    offset: u64,
+) !EntityId {
+    const id = db.createEntity();
+    try db.instances.peripherals.put(db.gpa, id, type_id);
+    try db.addName(id, name);
+    try db.addOffset(id, offset);
+
+    return id;
+}
+
+fn createField(
+    db: *Database,
+    name: []const u8,
+    size: u64,
+    offset: u64,
+) !EntityId {
+    const id = db.createEntity();
+    try db.types.fields.put(db.gpa, id, {});
+    try db.addName(id, name);
+    try db.addSize(id, size);
+    try db.addOffset(id, offset);
+
+    return id;
 }
 
 test "peripheral type with register and field" {
     var db = try Database.init(std.testing.allocator);
     defer db.deinit();
 
-    const field_id = db.createEntity();
-    try db.types.fields.put(db.gpa, field_id, {});
-    try db.addName(field_id, "TEST_FIELD");
-    try db.addSize(field_id, 1);
-    try db.addOffset(field_id, 0);
+    const field_id = try createField(&db, "TEST_FIELD", 1, 0);
 
-    const register_id = db.createEntity();
-    try db.types.registers.put(db.gpa, register_id, {});
-    try db.addName(register_id, "TEST_REGISTER");
-    try db.addOffset(register_id, 0);
-    try db.addSize(register_id, 32);
+    const register_id = try createRegister(&db, "TEST_REGISTER", 32, 0);
     try db.addChild("type.field", register_id, field_id);
 
-    const peripheral_id = db.createEntity();
-    try db.types.peripherals.put(db.gpa, peripheral_id, {});
-    try db.addName(peripheral_id, "TEST_PERIPHERAL");
+    const peripheral_id = try createPeripheral(&db, "TEST_PERIPHERAL");
     try db.addChild("type.register", peripheral_id, register_id);
 
     var buffer = std.ArrayList(u8).init(std.testing.allocator);
@@ -706,28 +803,15 @@ test "peripheral instantiation" {
     var db = try Database.init(std.testing.allocator);
     defer db.deinit();
 
-    const field_id = db.createEntity();
-    try db.types.fields.put(db.gpa, field_id, {});
-    try db.addName(field_id, "TEST_FIELD");
-    try db.addOffset(field_id, 0);
-    try db.addSize(field_id, 1);
+    const field_id = try createField(&db, "TEST_FIELD", 1, 0);
 
-    const register_id = db.createEntity();
-    try db.types.registers.put(db.gpa, register_id, {});
-    try db.addName(register_id, "TEST_REGISTER");
-    try db.addOffset(register_id, 0);
-    try db.addSize(register_id, 32);
+    const register_id = try createRegister(&db, "TEST_REGISTER", 32, 0);
     try db.addChild("type.field", register_id, field_id);
 
-    const peripheral_id = db.createEntity();
-    try db.types.peripherals.put(db.gpa, peripheral_id, {});
-    try db.addName(peripheral_id, "TEST_PERIPHERAL");
+    const peripheral_id = try createPeripheral(&db, "TEST_PERIPHERAL");
     try db.addChild("type.register", peripheral_id, register_id);
 
-    const instance_id = db.createEntity();
-    try db.instances.peripherals.put(db.gpa, instance_id, peripheral_id);
-    try db.addName(instance_id, "TEST0");
-    try db.addOffset(instance_id, 0x1000);
+    const instance_id = try createPeripheralInstance(&db, "TEST0", peripheral_id, 0x1000);
 
     const device_id = db.createEntity();
     try db.instances.devices.put(db.gpa, device_id, .{});
@@ -763,33 +847,16 @@ test "peripherals with a shared type" {
     var db = try Database.init(std.testing.allocator);
     defer db.deinit();
 
-    const field_id = db.createEntity();
-    try db.types.fields.put(db.gpa, field_id, {});
-    try db.addName(field_id, "TEST_FIELD");
-    try db.addSize(field_id, 1);
-    try db.addOffset(field_id, 0);
+    const field_id = try createField(&db, "TEST_FIELD", 1, 0);
 
-    const register_id = db.createEntity();
-    try db.types.registers.put(db.gpa, register_id, {});
-    try db.addName(register_id, "TEST_REGISTER");
-    try db.addOffset(register_id, 0);
-    try db.addSize(register_id, 32);
+    const register_id = try createRegister(&db, "TEST_REGISTER", 32, 0);
     try db.addChild("type.field", register_id, field_id);
 
-    const peripheral_id = db.createEntity();
-    try db.types.peripherals.put(db.gpa, peripheral_id, {});
-    try db.addName(peripheral_id, "TEST_PERIPHERAL");
+    const peripheral_id = try createPeripheral(&db, "TEST_PERIPHERAL");
     try db.addChild("type.register", peripheral_id, register_id);
 
-    const instance0_id = db.createEntity();
-    try db.instances.peripherals.put(db.gpa, instance0_id, peripheral_id);
-    try db.addName(instance0_id, "TEST0");
-    try db.addOffset(instance0_id, 0x1000);
-
-    const instance1_id = db.createEntity();
-    try db.instances.peripherals.put(db.gpa, instance1_id, peripheral_id);
-    try db.addName(instance1_id, "TEST1");
-    try db.addOffset(instance1_id, 0x2000);
+    const instance0_id = try createPeripheralInstance(&db, "TEST0", peripheral_id, 0x1000);
+    const instance1_id = try createPeripheralInstance(&db, "TEST1", peripheral_id, 0x2000);
 
     const device_id = db.createEntity();
     try db.instances.devices.put(db.gpa, device_id, .{});
@@ -844,42 +911,24 @@ test "peripheral with modes" {
         .qualifier = "TEST_PERIPHERAL.TEST_MODE2.COMMON_REGISTER.TEST_FIELD",
     });
 
-    const field_id = db.createEntity();
-    try db.types.fields.put(db.gpa, field_id, {});
-    try db.addName(field_id, "TEST_FIELD");
-    try db.addOffset(field_id, 0);
-    try db.addSize(field_id, 1);
-
     var register1_modeset = EntitySet{};
     try register1_modeset.put(db.gpa, mode1_id, {});
 
     var register2_modeset = EntitySet{};
     try register2_modeset.put(db.gpa, mode2_id, {});
 
-    const register1_id = db.createEntity();
-    try db.types.registers.put(db.gpa, register1_id, {});
-    try db.addName(register1_id, "TEST_REGISTER1");
-    try db.addOffset(register1_id, 0);
-    try db.addSize(register1_id, 32);
+    const register1_id = try createRegister(&db, "TEST_REGISTER1", 32, 0);
     try db.attrs.modes.put(db.gpa, register1_id, register1_modeset);
 
-    const register2_id = db.createEntity();
-    try db.types.registers.put(db.gpa, register2_id, {});
-    try db.addName(register2_id, "TEST_REGISTER2");
-    try db.addOffset(register2_id, 0);
-    try db.addSize(register2_id, 32);
+    const register2_id = try createRegister(&db, "TEST_REGISTER2", 32, 0);
     try db.attrs.modes.put(db.gpa, register2_id, register2_modeset);
 
-    const common_reg_id = db.createEntity();
-    try db.types.registers.put(db.gpa, common_reg_id, {});
-    try db.addName(common_reg_id, "COMMON_REGISTER");
-    try db.addOffset(common_reg_id, 4);
-    try db.addSize(common_reg_id, 32);
+    const field_id = try createField(&db, "TEST_FIELD", 1, 0);
+
+    const common_reg_id = try createRegister(&db, "COMMON_REGISTER", 32, 4);
     try db.addChild("type.field", common_reg_id, field_id);
 
-    const peripheral_id = db.createEntity();
-    try db.types.peripherals.put(db.gpa, peripheral_id, {});
-    try db.addName(peripheral_id, "TEST_PERIPHERAL");
+    const peripheral_id = try createPeripheral(&db, "TEST_PERIPHERAL");
     try db.addChild("type.register", peripheral_id, register1_id);
     try db.addChild("type.register", peripheral_id, register2_id);
     try db.addChild("type.register", peripheral_id, common_reg_id);
@@ -966,15 +1015,9 @@ test "peripheral with enum" {
     try db.addChild("type.enum_field", enum_id, enum_field1_id);
     try db.addChild("type.enum_field", enum_id, enum_field2_id);
 
-    const register_id = db.createEntity();
-    try db.types.registers.put(db.gpa, register_id, {});
-    try db.addName(register_id, "TEST_REGISTER");
-    try db.addOffset(register_id, 0);
-    try db.addSize(register_id, 8);
+    const register_id = try createRegister(&db, "TEST_REGISTER", 8, 0);
 
-    const peripheral_id = db.createEntity();
-    try db.types.peripherals.put(db.gpa, peripheral_id, {});
-    try db.addName(peripheral_id, "TEST_PERIPHERAL");
+    const peripheral_id = try createPeripheral(&db, "TEST_PERIPHERAL");
     try db.addChild("type.enum", peripheral_id, enum_id);
     try db.addChild("type.register", peripheral_id, register_id);
 
@@ -1019,15 +1062,9 @@ test "peripheral with enum, enum is exhausted of values" {
     try db.addChild("type.enum_field", enum_id, enum_field1_id);
     try db.addChild("type.enum_field", enum_id, enum_field2_id);
 
-    const register_id = db.createEntity();
-    try db.types.registers.put(db.gpa, register_id, {});
-    try db.addName(register_id, "TEST_REGISTER");
-    try db.addOffset(register_id, 0);
-    try db.addSize(register_id, 8);
+    const register_id = try createRegister(&db, "TEST_REGISTER", 8, 0);
 
-    const peripheral_id = db.createEntity();
-    try db.types.peripherals.put(db.gpa, peripheral_id, {});
-    try db.addName(peripheral_id, "TEST_PERIPHERAL");
+    const peripheral_id = try createPeripheral(&db, "TEST_PERIPHERAL");
     try db.addChild("type.enum", peripheral_id, enum_id);
     try db.addChild("type.register", peripheral_id, register_id);
 
@@ -1071,23 +1108,13 @@ test "field with named enum" {
     try db.addChild("type.enum_field", enum_id, enum_field1_id);
     try db.addChild("type.enum_field", enum_id, enum_field2_id);
 
-    const field_id = db.createEntity();
-    try db.types.fields.put(db.gpa, field_id, {});
-    try db.addName(field_id, "TEST_FIELD");
-    try db.addOffset(field_id, 0);
-    try db.addSize(field_id, 4);
+    const field_id = try createField(&db, "TEST_FIELD", 4, 0);
     try db.attrs.enums.put(db.gpa, field_id, enum_id);
 
-    const register_id = db.createEntity();
-    try db.types.registers.put(db.gpa, register_id, {});
-    try db.addName(register_id, "TEST_REGISTER");
-    try db.addOffset(register_id, 0);
-    try db.addSize(register_id, 8);
+    const register_id = try createRegister(&db, "TEST_REGISTER", 8, 0);
     try db.addChild("type.field", register_id, field_id);
 
-    const peripheral_id = db.createEntity();
-    try db.types.peripherals.put(db.gpa, peripheral_id, {});
-    try db.addName(peripheral_id, "TEST_PERIPHERAL");
+    const peripheral_id = try createPeripheral(&db, "TEST_PERIPHERAL");
     try db.addChild("type.enum", peripheral_id, enum_id);
     try db.addChild("type.register", peripheral_id, register_id);
 
@@ -1137,23 +1164,13 @@ test "field with anonymous enum" {
     try db.addChild("type.enum_field", enum_id, enum_field1_id);
     try db.addChild("type.enum_field", enum_id, enum_field2_id);
 
-    const field_id = db.createEntity();
-    try db.types.fields.put(db.gpa, field_id, {});
-    try db.addName(field_id, "TEST_FIELD");
-    try db.addOffset(field_id, 0);
-    try db.addSize(field_id, 4);
+    const field_id = try createField(&db, "TEST_FIELD", 4, 0);
     try db.attrs.enums.put(db.gpa, field_id, enum_id);
 
-    const register_id = db.createEntity();
-    try db.types.registers.put(db.gpa, register_id, {});
-    try db.addName(register_id, "TEST_REGISTER");
-    try db.addOffset(register_id, 0);
-    try db.addSize(register_id, 8);
+    const register_id = try createRegister(&db, "TEST_REGISTER", 8, 0);
     try db.addChild("type.field", register_id, field_id);
 
-    const peripheral_id = db.createEntity();
-    try db.types.peripherals.put(db.gpa, peripheral_id, {});
-    try db.addName(peripheral_id, "TEST_PERIPHERAL");
+    const peripheral_id = try createPeripheral(&db, "TEST_PERIPHERAL");
     try db.addChild("type.enum", peripheral_id, enum_id);
     try db.addChild("type.register", peripheral_id, register_id);
 
@@ -1174,6 +1191,79 @@ test "field with anonymous enum" {
         \\            },
         \\            padding: u4 = 0,
         \\        }),
+        \\    };
+        \\};
+        \\
+    , buffer.items);
+}
+
+test "namespaced register groups" {
+    var db = try Database.init(std.testing.allocator);
+    defer db.deinit();
+
+    var buffer = std.ArrayList(u8).init(std.testing.allocator);
+    defer buffer.deinit();
+
+    // registers
+    const portb_id = try createRegister(&db, "PORTB", 8, 0);
+    const ddrb_id = try createRegister(&db, "DDRB", 8, 1);
+    const pinb_id = try createRegister(&db, "PINB", 8, 2);
+
+    const portc_id = try createRegister(&db, "PORTC", 8, 0);
+    const ddrc_id = try createRegister(&db, "DDRC", 8, 1);
+    const pinc_id = try createRegister(&db, "PINC", 8, 2);
+
+    // register_groups
+    const portb_group_id = try createRegisterGroup(&db, "PORTB");
+    try db.addChild("type.register", portb_group_id, portb_id);
+    try db.addChild("type.register", portb_group_id, ddrb_id);
+    try db.addChild("type.register", portb_group_id, pinb_id);
+
+    const portc_group_id = try createRegisterGroup(&db, "PORTC");
+    try db.addChild("type.register", portc_group_id, portc_id);
+    try db.addChild("type.register", portc_group_id, ddrc_id);
+    try db.addChild("type.register", portc_group_id, pinc_id);
+
+    // peripheral
+    const peripheral_id = try createPeripheral(&db, "PORT");
+    try db.addChild("type.register_group", peripheral_id, portb_group_id);
+    try db.addChild("type.register_group", peripheral_id, portc_group_id);
+
+    // instances
+    const portb_instance_id = try createPeripheralInstance(&db, "PORTB", portb_group_id, 0x23);
+    const portc_instance_id = try createPeripheralInstance(&db, "PORTC", portc_group_id, 0x26);
+
+    // device
+    const device_id = db.createEntity();
+    try db.instances.devices.put(db.gpa, device_id, .{});
+    try db.addName(device_id, "ATmega328P");
+    try db.addChild("instance.peripheral", device_id, portb_instance_id);
+    try db.addChild("instance.peripheral", device_id, portc_instance_id);
+
+    try db.toZig(buffer.writer());
+    try std.testing.expectEqualStrings(
+        \\const mmio = @import("mmio");
+        \\
+        \\pub const devices = struct {
+        \\    pub const ATmega328P = struct {
+        \\        pub const PORTB = @ptrCast(*volatile types.PORT.PORTB, 0x23);
+        \\        pub const PORTC = @ptrCast(*volatile types.PORT.PORTC, 0x26);
+        \\    };
+        \\};
+        \\
+        \\pub const types = struct {
+        \\    pub const PORT = struct {
+        \\        pub const PORTB = packed struct {
+        \\            PORTB: u8,
+        \\            DDRB: u8,
+        \\            PINB: u8,
+        \\        };
+        \\
+        \\        pub const PORTC = packed struct {
+        \\            PORTC: u8,
+        \\            DDRC: u8,
+        \\            PINC: u8,
+        \\        };
         \\    };
         \\};
         \\
