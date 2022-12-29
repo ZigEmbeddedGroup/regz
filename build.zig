@@ -135,6 +135,7 @@ pub fn build(b: *std.build.Builder) !void {
     tests.addOptions("build_options", regz.build_options);
     tests.addPackagePath("xml", "src/xml.zig");
     tests.addPackagePath("Database", "src/Database.zig");
+    pkgs.addAllTo(tests);
     regz.xml.link(tests);
 
     const test_step = b.step("test", "Run unit tests");

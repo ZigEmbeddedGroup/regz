@@ -57,7 +57,7 @@ fn populateTypes(
     var it = db.types.peripherals.iterator();
     while (it.next()) |entry| {
         const periph_id = entry.key_ptr.*;
-        const name = db.attrs.names.get(periph_id) orelse continue;
+        const name = db.attrs.name.get(periph_id) orelse continue;
         var typ = json.ObjectMap.init(allocator);
         try populateType(db, arena, periph_id, &typ);
         try types.put(name, .{ .Object = typ });
@@ -71,22 +71,22 @@ fn populateType(
     typ: *json.ObjectMap,
 ) !void {
     const allocator = arena.allocator();
-    if (db.attrs.descriptions.get(id)) |description|
+    if (db.attrs.description.get(id)) |description|
         try typ.put("description", .{ .String = description });
 
-    if (db.attrs.offsets.get(id)) |offset|
+    if (db.attrs.offset.get(id)) |offset|
         try typ.put("offset", .{ .Integer = @intCast(i64, offset) });
 
-    if (db.attrs.sizes.get(id)) |size|
+    if (db.attrs.size.get(id)) |size|
         try typ.put("size", .{ .Integer = @intCast(i64, size) });
 
-    if (db.attrs.reset_values.get(id)) |reset_value|
+    if (db.attrs.reset_value.get(id)) |reset_value|
         try typ.put("reset_value", .{ .Integer = @intCast(i64, reset_value) });
 
-    if (db.attrs.reset_masks.get(id)) |reset_mask|
+    if (db.attrs.reset_mask.get(id)) |reset_mask|
         try typ.put("reset_mask", .{ .Integer = @intCast(i64, reset_mask) });
 
-    if (db.attrs.versions.get(id)) |version|
+    if (db.attrs.version.get(id)) |version|
         try typ.put("version", .{ .String = version });
 
     if (db.attrs.access.get(id)) |access| if (access != .read_write)
@@ -98,8 +98,8 @@ fn populateType(
             },
         });
 
-    if (db.attrs.enums.get(id)) |enum_id|
-        if (db.attrs.names.get(enum_id)) |enum_name|
+    if (db.attrs.@"enum".get(id)) |enum_id|
+        if (db.attrs.name.get(enum_id)) |enum_name|
             try typ.put("enum", .{ .String = enum_name });
 
     if (db.attrs.modes.get(id)) |modeset| {
@@ -107,7 +107,7 @@ fn populateType(
 
         var it = modeset.iterator();
         while (it.next()) |entry|
-            if (db.attrs.names.get(entry.key_ptr.*)) |mode_name|
+            if (db.attrs.name.get(entry.key_ptr.*)) |mode_name|
                 try modearray.append(.{ .String = mode_name });
 
         if (modearray.items.len > 0)
@@ -130,7 +130,7 @@ fn populateType(
             var it = set.iterator();
             while (it.next()) |entry| {
                 const child_id = entry.key_ptr.*;
-                const name = db.attrs.names.get(child_id) orelse continue;
+                const name = db.attrs.name.get(child_id) orelse continue;
                 var child_type = json.ObjectMap.init(allocator);
                 try populateType(db, arena, child_id, &child_type);
                 try obj.put(name, .{ .Object = child_type });
@@ -153,7 +153,7 @@ fn populateDevice(
     id: EntityId,
 ) !void {
     const allocator = arena.allocator();
-    const name = db.attrs.names.get(id) orelse return error.MissingDeviceName;
+    const name = db.attrs.name.get(id) orelse return error.MissingDeviceName;
 
     var device = json.ObjectMap.init(allocator);
     var properties = json.ObjectMap.init(allocator);
@@ -203,10 +203,10 @@ fn populateInterrupt(
     const allocator = arena.allocator();
     var interrupt = json.ObjectMap.init(allocator);
 
-    const name = db.attrs.names.get(id) orelse return error.MissingInterruptName;
+    const name = db.attrs.name.get(id) orelse return error.MissingInterruptName;
     const index = db.instances.interrupts.get(id) orelse return error.MissingInterruptIndex;
     try interrupt.put("index", .{ .Integer = index });
-    if (db.attrs.descriptions.get(id)) |description|
+    if (db.attrs.description.get(id)) |description|
         try interrupt.put("description", .{ .String = description });
 
     try interrupts.put(name, .{ .Object = interrupt });
@@ -221,23 +221,27 @@ fn populatePeripheral(
     type_id: EntityId,
 ) !void {
     const allocator = arena.allocator();
-    const name = db.attrs.names.get(id) orelse return error.MissingPeripheralName;
+    const name = db.attrs.name.get(id) orelse return error.MissingPeripheralName;
     var peripheral = json.ObjectMap.init(allocator);
-    if (db.attrs.descriptions.get(id)) |description|
+    if (db.attrs.description.get(id)) |description|
         try peripheral.put("description", .{ .String = description });
 
-    if (db.attrs.offsets.get(id)) |offset|
+    if (db.attrs.offset.get(id)) |offset|
         try peripheral.put("offset", .{ .Integer = @intCast(i64, offset) });
 
-    if (db.attrs.versions.get(id)) |version|
+    if (db.attrs.version.get(id)) |version|
         try peripheral.put("version", .{ .String = version });
 
     // if the peripheral instance's type is named, then we add it to the list
     // of types to populate
-    if (db.attrs.names.get(type_id)) |type_name| {
+    if (db.attrs.name.get(type_id)) |type_name| {
         // TODO: handle collisions -- will need to inline the type
         try types_to_populate.put(type_name, type_id);
         try peripheral.put("type", .{ .String = type_name });
+    } else {
+        var typ = json.ObjectMap.init(allocator);
+        try populateType(db, arena, type_id, &typ);
+        try peripheral.put("type", .{ .Object = typ });
     }
 
     // TODO: peripheral instance children
