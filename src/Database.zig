@@ -1,45 +1,3 @@
-const std = @import("std");
-const Allocator = std.mem.Allocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
-const assert = std.debug.assert;
-const HashMap = std.AutoHashMapUnmanaged;
-const ArrayHashMap = std.AutoArrayHashMapUnmanaged;
-
-const xml = @import("xml.zig");
-const svd = @import("svd.zig");
-const atdf = @import("atdf.zig");
-const dslite = @import("dslite.zig");
-const gen = @import("gen.zig");
-const regzon = @import("regzon.zig");
-
-const Database = @This();
-const log = std.log.scoped(.database);
-
-pub const EntityId = u32;
-pub const EntitySet = ArrayHashMap(EntityId, void);
-
-pub const Access = enum {
-    read_only,
-    write_only,
-    read_write,
-};
-
-pub const Device = struct {
-    properties: std.StringHashMapUnmanaged([]const u8) = .{},
-
-    pub fn deinit(self: *Device, gpa: Allocator) void {
-        self.properties.deinit(gpa);
-    }
-};
-
-pub const Mode = struct {
-    qualifier: []const u8,
-    value: []const u8,
-};
-
-/// a collection of modes that applies to a register or bitfield
-pub const Modes = EntitySet;
-
 gpa: Allocator,
 arena: *ArenaAllocator,
 next_entity_id: u32,
@@ -47,23 +5,24 @@ next_entity_id: u32,
 // attributes are extra information that each entity might have, in some
 // contexts they're required, in others they're optional
 attrs: struct {
-    names: HashMap(EntityId, []const u8) = .{},
-    descriptions: HashMap(EntityId, []const u8) = .{},
-    offsets: HashMap(EntityId, u64) = .{},
+    name: HashMap(EntityId, []const u8) = .{},
+    description: HashMap(EntityId, []const u8) = .{},
+    offset: HashMap(EntityId, u64) = .{},
     access: HashMap(EntityId, Access) = .{},
     repeated: HashMap(EntityId, u64) = .{},
-    sizes: HashMap(EntityId, u64) = .{},
-    reset_values: HashMap(EntityId, u64) = .{},
-    reset_masks: HashMap(EntityId, u64) = .{},
-    versions: HashMap(EntityId, []const u8) = .{},
+    size: HashMap(EntityId, u64) = .{},
+    reset_value: HashMap(EntityId, u64) = .{},
+    reset_mask: HashMap(EntityId, u64) = .{},
+    version: HashMap(EntityId, []const u8) = .{},
 
     // a register or bitfield can be valid in one or more modes of their parent
     modes: HashMap(EntityId, Modes) = .{},
 
-    // a field type might have an enum type
-    enums: HashMap(EntityId, EntityId) = .{},
+    // a field type might have an enum type. This is an array hash map
+    // because it's iterated when inferring enum size
+    @"enum": ArrayHashMap(EntityId, EntityId) = .{},
 
-    parents: HashMap(EntityId, EntityId) = .{},
+    parent: HashMap(EntityId, EntityId) = .{},
 } = .{},
 
 children: struct {
@@ -93,12 +52,58 @@ instances: struct {
     devices: ArrayHashMap(EntityId, Device) = .{},
     interrupts: ArrayHashMap(EntityId, i32) = .{},
     peripherals: ArrayHashMap(EntityId, EntityId) = .{},
-    //register_groups: ArrayHashMap(EntityId, EntityId) = .{},
-    //registers: ArrayHashMap(EntityId, EntityId) = .{},
 } = .{},
 
 // to speed up lookups
 indexes: struct {} = .{},
+
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const assert = std.debug.assert;
+const HashMap = std.AutoHashMapUnmanaged;
+const ArrayHashMap = std.AutoArrayHashMapUnmanaged;
+
+const xml = @import("xml.zig");
+const svd = @import("svd.zig");
+const atdf = @import("atdf.zig");
+const dslite = @import("dslite.zig");
+const gen = @import("gen.zig");
+const regzon = @import("regzon.zig");
+
+const Database = @This();
+const log = std.log.scoped(.database);
+
+const TypeOfField = @import("testing.zig").TypeOfField;
+
+pub const EntityId = u32;
+pub const EntitySet = ArrayHashMap(EntityId, void);
+
+// not sure how to communicate the *_once values in generated code besides
+// adding it to documentation comments
+pub const Access = enum {
+    read_write,
+    read_only,
+    write_only,
+    write_once,
+    read_write_once,
+};
+
+pub const Device = struct {
+    properties: std.StringHashMapUnmanaged([]const u8) = .{},
+
+    pub fn deinit(self: *Device, gpa: Allocator) void {
+        self.properties.deinit(gpa);
+    }
+};
+
+pub const Mode = struct {
+    qualifier: []const u8,
+    value: []const u8,
+};
+
+/// a collection of modes that applies to a register or bitfield
+pub const Modes = EntitySet;
 
 fn deinitMapAndValues(allocator: std.mem.Allocator, map: anytype) void {
     var it = map.iterator();
@@ -110,17 +115,17 @@ fn deinitMapAndValues(allocator: std.mem.Allocator, map: anytype) void {
 
 pub fn deinit(db: *Database) void {
     // attrs
-    db.attrs.names.deinit(db.gpa);
-    db.attrs.descriptions.deinit(db.gpa);
-    db.attrs.offsets.deinit(db.gpa);
+    db.attrs.name.deinit(db.gpa);
+    db.attrs.description.deinit(db.gpa);
+    db.attrs.offset.deinit(db.gpa);
     db.attrs.access.deinit(db.gpa);
     db.attrs.repeated.deinit(db.gpa);
-    db.attrs.sizes.deinit(db.gpa);
-    db.attrs.reset_values.deinit(db.gpa);
-    db.attrs.reset_masks.deinit(db.gpa);
-    db.attrs.versions.deinit(db.gpa);
-    db.attrs.enums.deinit(db.gpa);
-    db.attrs.parents.deinit(db.gpa);
+    db.attrs.size.deinit(db.gpa);
+    db.attrs.reset_value.deinit(db.gpa);
+    db.attrs.reset_mask.deinit(db.gpa);
+    db.attrs.version.deinit(db.gpa);
+    db.attrs.@"enum".deinit(db.gpa);
+    db.attrs.parent.deinit(db.gpa);
     deinitMapAndValues(db.gpa, &db.attrs.modes);
 
     // children
@@ -208,12 +213,229 @@ pub fn destroyEntity(db: *Database, id: EntityId) void {
     _ = id;
 }
 
+pub fn createDevice(
+    db: *Database,
+    opts: struct {
+        // required for now
+        name: []const u8,
+    },
+) !EntityId {
+    const id = db.createEntity();
+    errdefer db.destroyEntity(id);
+
+    log.debug("{}: creating device", .{id});
+    try db.instances.devices.put(db.gpa, id, .{});
+    try db.addName(id, opts.name);
+
+    return id;
+}
+
+pub fn createPeripheralInstance(
+    db: *Database,
+    device_id: EntityId,
+    type_id: EntityId,
+    opts: struct {
+        // required for now
+        name: []const u8,
+        // required for now
+        offset: u64,
+    },
+) !EntityId {
+    assert(db.entityIs("instance.device", device_id));
+    assert(db.entityIs("type.peripheral", type_id) or
+        db.entityIs("type.register_group", type_id));
+
+    const id = db.createEntity();
+    errdefer db.destroyEntity(id);
+
+    log.debug("{}: creating peripheral instance", .{id});
+    try db.instances.peripherals.put(db.gpa, id, type_id);
+    try db.addName(id, opts.name);
+    try db.addOffset(id, opts.offset);
+
+    try db.addChild("instance.peripheral", device_id, id);
+    return id;
+}
+
+pub fn createPeripheral(
+    db: *Database,
+    opts: struct {
+        name: ?[]const u8 = null,
+    },
+) !EntityId {
+    const id = db.createEntity();
+    errdefer db.destroyEntity(id);
+
+    log.debug("{}: creating peripheral", .{id});
+
+    try db.types.peripherals.put(db.gpa, id, {});
+    if (opts.name) |n|
+        try db.addName(id, n);
+
+    return id;
+}
+
+pub fn createRegisterGroup(
+    db: *Database,
+    parent_id: EntityId,
+    opts: struct {
+        name: []const u8,
+    },
+) !EntityId {
+    assert(db.entityIs("type.peripheral", parent_id));
+
+    const id = db.createEntity();
+    errdefer db.destroyEntity(id);
+
+    log.debug("{}: creating register group", .{id});
+    try db.types.register_groups.put(db.gpa, id, {});
+    try db.addName(id, opts.name);
+
+    try db.addChild("type.register_group", parent_id, id);
+    return id;
+}
+
+pub fn createRegister(
+    db: *Database,
+    parent_id: EntityId,
+    opts: struct {
+        // make name required for now
+        name: []const u8,
+        description: ?[]const u8 = null,
+        /// offset is in bytes
+        offset: ?u64 = null,
+        /// size is in bits
+        size: ?u64 = null,
+    },
+) !EntityId {
+    assert(db.entityIs("type.peripheral", parent_id) or
+        db.entityIs("type.register_group", parent_id));
+
+    const id = db.createEntity();
+    errdefer db.destroyEntity(id);
+
+    log.debug("{}: creating register", .{id});
+
+    try db.types.registers.put(db.gpa, id, {});
+    try db.addName(id, opts.name);
+    if (opts.description) |d|
+        try db.addDescription(id, d);
+
+    if (opts.offset) |o|
+        try db.addOffset(id, o);
+
+    if (opts.size) |s|
+        try db.addSize(id, s);
+
+    try db.addChild("type.register", parent_id, id);
+
+    return id;
+}
+
+pub fn createField(
+    db: *Database,
+    parent_id: EntityId,
+    opts: struct {
+        // make name required for now
+        name: []const u8,
+        description: ?[]const u8 = null,
+        /// offset is in bits
+        offset: ?u64 = null,
+        /// size is in bits
+        size: ?u64 = null,
+        enum_id: ?EntityId = null,
+    },
+) !EntityId {
+    assert(db.entityIs("type.register", parent_id));
+
+    const id = db.createEntity();
+    errdefer db.destroyEntity(id);
+
+    log.debug("{}: creating field", .{id});
+    try db.types.fields.put(db.gpa, id, {});
+    try db.addName(id, opts.name);
+    if (opts.description) |d|
+        try db.addDescription(id, d);
+
+    if (opts.offset) |o|
+        try db.addOffset(id, o);
+
+    if (opts.size) |s|
+        try db.addSize(id, s);
+
+    if (opts.enum_id) |enum_id| {
+        assert(db.entityIs("type.enum", enum_id));
+        if (db.attrs.size.get(enum_id)) |enum_size|
+            if (opts.size) |size|
+                assert(size == enum_size);
+
+        try db.attrs.@"enum".put(db.gpa, id, enum_id);
+    }
+
+    try db.addChild("type.field", parent_id, id);
+
+    return id;
+}
+
+pub fn createEnum(
+    db: *Database,
+    parent_id: EntityId,
+    opts: struct {
+        name: ?[]const u8 = null,
+        size: ?u64 = null,
+    },
+) !EntityId {
+    // TODO: other parent types
+    assert(db.entityIs("type.peripheral", parent_id) or
+        db.entityIs("type.field", parent_id));
+
+    const id = db.createEntity();
+    errdefer db.destroyEntity(id);
+
+    log.debug("{}: creating enum", .{id});
+    try db.types.enums.put(db.gpa, id, {});
+
+    if (opts.name) |n|
+        try db.addName(id, n);
+
+    if (opts.size) |s|
+        try db.addSize(id, s);
+
+    try db.addChild("type.enum", parent_id, id);
+    return id;
+}
+
+pub fn createEnumField(
+    db: *Database,
+    parent_id: EntityId,
+    opts: struct {
+        name: []const u8,
+        description: ?[]const u8 = null,
+        value: u32,
+    },
+) !EntityId {
+    assert(db.entityIs("type.enum", parent_id));
+
+    const id = db.createEntity();
+    errdefer db.destroyEntity(id);
+
+    log.debug("{}: creating enum field", .{id});
+    try db.types.enum_fields.put(db.gpa, id, opts.value);
+    try db.addName(id, opts.name);
+
+    if (opts.description) |d|
+        try db.addDescription(id, d);
+
+    try db.addChild("type.enum_field", parent_id, id);
+    return id;
+}
+
 pub fn addName(db: *Database, id: EntityId, name: []const u8) !void {
     if (name.len == 0)
         return;
 
     log.debug("{}: adding name: {s}", .{ id, name });
-    try db.attrs.names.putNoClobber(
+    try db.attrs.name.putNoClobber(
         db.gpa,
         id,
         try db.arena.allocator().dupe(u8, name),
@@ -229,26 +451,48 @@ pub fn addDescription(
         return;
 
     log.debug("{}: adding description: {s}", .{ id, description });
-    try db.attrs.descriptions.putNoClobber(
+    try db.attrs.description.putNoClobber(
         db.gpa,
         id,
         try db.arena.allocator().dupe(u8, description),
     );
 }
 
+pub fn addVersion(db: *Database, id: EntityId, version: []const u8) !void {
+    if (version.len == 0)
+        return;
+
+    log.debug("{}: adding version: {s}", .{ id, version });
+    try db.attrs.version.putNoClobber(
+        db.gpa,
+        id,
+        try db.arena.allocator().dupe(u8, version),
+    );
+}
+
 pub fn addSize(db: *Database, id: EntityId, size: u64) !void {
     log.debug("{}: adding size: {}", .{ id, size });
-    try db.attrs.sizes.putNoClobber(db.gpa, id, size);
+    try db.attrs.size.putNoClobber(db.gpa, id, size);
 }
 
 pub fn addOffset(db: *Database, id: EntityId, offset: u64) !void {
     log.debug("{}: adding offset: {}", .{ id, offset });
-    try db.attrs.offsets.putNoClobber(db.gpa, id, offset);
+    try db.attrs.offset.putNoClobber(db.gpa, id, offset);
 }
 
 pub fn addResetValue(db: *Database, id: EntityId, reset_value: u64) !void {
     log.debug("{}: adding reset value: {}", .{ id, reset_value });
-    try db.attrs.reset_values.putNoClobber(db.gpa, id, reset_value);
+    try db.attrs.reset_value.putNoClobber(db.gpa, id, reset_value);
+}
+
+pub fn addResetMask(db: *Database, id: EntityId, reset_mask: u64) !void {
+    log.debug("{}: adding register mask: 0x{}", .{ id, reset_mask });
+    try db.attrs.reset_mask.putNoClobber(db.gpa, id, reset_mask);
+}
+
+pub fn addAccess(db: *Database, id: EntityId, access: Access) !void {
+    log.debug("{}: adding access: {}", .{ id, access });
+    try db.attrs.access.putNoClobber(db.gpa, id, access);
 }
 
 pub fn addChild(
@@ -275,7 +519,7 @@ pub fn addChild(
         result.value_ptr.* = .{};
 
     try result.value_ptr.put(db.gpa, child_id, {});
-    try db.attrs.parents.putNoClobber(db.gpa, child_id, parent_id);
+    try db.attrs.parent.putNoClobber(db.gpa, child_id, parent_id);
 }
 
 pub fn addDeviceProperty(
@@ -321,12 +565,45 @@ pub fn getEntityIdByName(
     var it = @field(@field(db, group), table).iterator();
     return while (it.next()) |entry| {
         const entry_id = entry.key_ptr.*;
-        const entry_name = db.attrs.names.get(entry_id) orelse continue;
+        const entry_name = db.attrs.name.get(entry_id) orelse continue;
         if (std.mem.eql(u8, name, entry_name)) {
             assert(db.entityIs(entity_location, entry_id));
             return entry_id;
         }
     } else error.NameNotFound;
+}
+
+pub const EntityType = enum {
+    peripheral,
+    register_group,
+    register,
+    field,
+    @"enum",
+    enum_field,
+    mode,
+    device,
+    interrupt,
+    peripheral_instance,
+};
+
+pub fn getEntityType(
+    db: Database,
+    id: EntityId,
+) EntityType {
+    inline for (@typeInfo(TypeOfField(Database, "types")).Struct.fields) |field| {
+        if (@field(db.types, field.name).contains(id))
+            return @field(EntityType, field.name[0 .. field.name.len - 1]);
+    }
+
+    inline for (@typeInfo(TypeOfField(Database, "instances")).Struct.fields) |field| {
+        if (@field(db.instances, field.name).contains(id))
+            return if (std.mem.eql(u8, "peripheral", field.name))
+                .peripheral_instance
+            else
+                @field(EntityType, field.name[0 .. field.name.len - 1]);
+    }
+
+    @panic("unhandled entity type");
 }
 
 // assert that the database is in valid state

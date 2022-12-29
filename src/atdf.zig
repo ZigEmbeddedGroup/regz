@@ -102,7 +102,8 @@ fn inferPeripheralOffsets(db: *Database) !void {
     while (type_it.next()) |type_entry| if (type_entry.value_ptr.count == 1) {
         const type_id = type_entry.key_ptr.*;
         const instance_id = type_entry.value_ptr.instance_id;
-        try inferPeripheralOffset(db, type_id, instance_id);
+        inferPeripheralOffset(db, type_id, instance_id) catch |err|
+            log.warn("failed to infer peripheral instance offset: {}", .{err});
     };
 }
 
@@ -115,7 +116,7 @@ fn inferPeripheralOffset(db: *Database, type_id: EntityId, instance_id: EntityId
     var register_it = register_set.iterator();
     while (register_it.next()) |register_entry| {
         const register_id = register_entry.key_ptr.*;
-        const offset = db.attrs.offsets.get(register_id) orelse continue;
+        const offset = db.attrs.offset.get(register_id) orelse continue;
 
         if (min_offset == null)
             min_offset = offset
@@ -123,13 +124,16 @@ fn inferPeripheralOffset(db: *Database, type_id: EntityId, instance_id: EntityId
             min_offset = std.math.min(min_offset.?, offset);
     }
 
-    const instance_offset: u64 = db.attrs.offsets.get(instance_id) orelse 0;
-    try db.attrs.offsets.put(db.gpa, instance_id, instance_offset + min_offset.?);
+    if (min_offset == null)
+        return error.NoRegisters;
+
+    const instance_offset: u64 = db.attrs.offset.get(instance_id) orelse 0;
+    try db.attrs.offset.put(db.gpa, instance_id, instance_offset + min_offset.?);
 
     register_it = register_set.iterator();
     while (register_it.next()) |register_entry| {
         const register_id = register_entry.key_ptr.*;
-        if (db.attrs.offsets.getEntry(register_id)) |offset_entry|
+        if (db.attrs.offset.getEntry(register_id)) |offset_entry|
             offset_entry.value_ptr.* -= min_offset.?;
     }
 }
@@ -142,7 +146,7 @@ fn inferEnumSizes(db: *Database) !void {
         const enum_id = entry.key_ptr.*;
         inferEnumSize(db, enum_id) catch |err| {
             log.warn("failed to infer size of enum '{s}': {}", .{
-                db.attrs.names.get(enum_id) orelse "<unknown>",
+                db.attrs.name.get(enum_id) orelse "<unknown>",
                 err,
             });
         };
@@ -166,7 +170,7 @@ fn inferEnumSize(db: *Database, enum_id: EntityId) !void {
     var field_sizes = std.ArrayList(u64).init(db.gpa);
     defer field_sizes.deinit();
 
-    var it = db.attrs.enums.iterator();
+    var it = db.attrs.@"enum".iterator();
     while (it.next()) |entry| {
         const field_id = entry.key_ptr.*;
         const other_enum_id = entry.value_ptr.*;
@@ -174,7 +178,7 @@ fn inferEnumSize(db: *Database, enum_id: EntityId) !void {
         if (other_enum_id != enum_id)
             continue;
 
-        const field_size = db.attrs.sizes.get(field_id) orelse continue;
+        const field_size = db.attrs.size.get(field_id) orelse continue;
         try field_sizes.append(field_size);
     }
 
@@ -185,7 +189,7 @@ fn inferEnumSize(db: *Database, enum_id: EntityId) !void {
         if (max_value == 0)
             1
         else
-            try std.math.ceilPowerOfTwo(u64, max_value)
+            std.math.log2_int(u64, max_value) + 1
     else blk: {
         var ret: ?u64 = null;
         for (field_sizes.items) |field_size| {
@@ -195,13 +199,13 @@ fn inferEnumSize(db: *Database, enum_id: EntityId) !void {
                 return error.InconsistentEnumSizes;
         }
 
+        if (max_value > 0 and (std.math.log2_int(u64, max_value) + 1) > ret.?)
+            return error.EnumMaxValueTooBig;
+
         break :blk ret.?;
     };
 
-    //if (try std.math.ceilPowerOfTwo(u32, max_value) > size)
-    //    return error.EnumMaxValueTooBig;
-
-    try db.attrs.sizes.put(db.gpa, enum_id, size);
+    try db.attrs.size.put(db.gpa, enum_id, size);
 }
 
 // TODO: instances use name in module
@@ -392,7 +396,7 @@ fn assignModesToEntity(
         var it = mode_set.iterator();
         while (it.next()) |mode_entry| {
             const mode_id = mode_entry.key_ptr.*;
-            if (db.attrs.names.get(mode_id)) |name|
+            if (db.attrs.name.get(mode_id)) |name|
                 if (std.mem.eql(u8, name, mode_str)) {
                     const result = try db.attrs.modes.getOrPut(db.gpa, id);
                     if (!result.found_existing)
@@ -403,7 +407,7 @@ fn assignModesToEntity(
                     return;
                 };
         } else {
-            if (db.attrs.names.get(id)) |name|
+            if (db.attrs.name.get(id)) |name|
                 log.warn("failed to find mode '{s}' for '{s}'", .{
                     mode_str,
                     name,
@@ -446,13 +450,23 @@ fn loadRegister(
         "offset",
     });
 
-    const id = db.createEntity();
+    const name = node.getAttribute("name") orelse return error.MissingRegisterName;
+
+    const id = try db.createRegister(parent_id, .{
+        .name = name,
+        .description = node.getAttribute("caption"),
+        //  size is in bytes, convert to bits
+        .size = if (node.getAttribute("size")) |size_str|
+            @as(u64, 8) * try std.fmt.parseInt(u64, size_str, 0)
+        else
+            null,
+        .offset = if (node.getAttribute("offset")) |offset_str|
+            try std.fmt.parseInt(u64, offset_str, 0)
+        else
+            null,
+    });
     errdefer db.destroyEntity(id);
 
-    log.debug("{}: creating register", .{id});
-    const name = node.getAttribute("name") orelse return error.MissingRegisterName;
-    try db.types.registers.put(db.gpa, id, {});
-    try db.addName(id, name);
     if (node.getAttribute("modes")) |modes|
         assignModesToEntity(db, id, parent_id, modes) catch {
             log.warn("failed to find mode '{s}' for register '{s}'", .{
@@ -460,21 +474,6 @@ fn loadRegister(
                 name,
             });
         };
-
-    if (node.getAttribute("caption")) |caption|
-        try db.addDescription(id, caption);
-
-    // offset is in bytes
-    if (node.getAttribute("offset")) |offset_str| {
-        const offset = try std.fmt.parseInt(u64, offset_str, 0);
-        try db.addOffset(id, offset);
-    }
-
-    // size is in bytes, convert to bits
-    if (node.getAttribute("size")) |size_str| {
-        const size = try std.fmt.parseInt(u64, size_str, 0);
-        try db.addSize(id, size * 8);
-    }
 
     if (node.getAttribute("initval")) |initval_str| {
         const initval = try std.fmt.parseInt(u64, initval_str, 0);
@@ -503,8 +502,6 @@ fn loadRegister(
     var field_it = node.iterate(&.{}, "bitfield");
     while (field_it.next()) |field_node|
         loadField(db, field_node, id) catch {};
-
-    try db.addChild("type.register", parent_id, id);
 }
 
 fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
@@ -547,16 +544,13 @@ fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
                 });
                 bit_count += 1;
 
-                const id = db.createEntity();
+                const id = try db.createField(register_id, .{
+                    .name = field_name,
+                    .description = node.getAttribute("caption"),
+                    .size = 1,
+                    .offset = i,
+                });
                 errdefer db.destroyEntity(id);
-
-                log.debug("{}: creating field", .{id});
-                try db.types.fields.put(db.gpa, id, {});
-                try db.addName(id, field_name);
-                try db.addOffset(id, i);
-                try db.addSize(id, 1);
-                if (node.getAttribute("caption")) |caption|
-                    try db.addDescription(id, caption);
 
                 if (node.getAttribute("modes")) |modes|
                     assignModesToEntity(db, id, register_id, modes) catch {
@@ -579,22 +573,18 @@ fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
                 }
 
                 // discontiguous fields like this don't get to have enums
-                try db.addChild("type.field", register_id, id);
             }
         }
     } else {
         const width = @popCount(mask);
 
-        const id = db.createEntity();
+        const id = try db.createField(register_id, .{
+            .name = name,
+            .description = node.getAttribute("caption"),
+            .size = width,
+            .offset = offset,
+        });
         errdefer db.destroyEntity(id);
-
-        log.debug("{}: creating field", .{id});
-        try db.types.fields.put(db.gpa, id, {});
-        try db.addName(id, name);
-        try db.addOffset(id, offset);
-        try db.addSize(id, width);
-        if (node.getAttribute("caption")) |caption|
-            try db.addDescription(id, caption);
 
         // TODO: modes are space delimited, and multiple can apply to a single bitfield or register
         if (node.getAttribute("modes")) |modes|
@@ -623,16 +613,14 @@ fn loadField(db: *Database, node: xml.Node, register_id: EntityId) !void {
             var it = db.types.enums.iterator();
             while (it.next()) |entry| {
                 const enum_id = entry.key_ptr.*;
-                const enum_name = db.attrs.names.get(enum_id) orelse continue;
+                const enum_name = db.attrs.name.get(enum_id) orelse continue;
                 if (std.mem.eql(u8, enum_name, values)) {
                     log.debug("{}: assigned enum '{s}'", .{ id, enum_name });
-                    try db.attrs.enums.put(db.gpa, id, enum_id);
+                    try db.attrs.@"enum".put(db.gpa, id, enum_id);
                     break;
                 }
             } else log.debug("{}: failed to find corresponding enum", .{id});
         }
-
-        try db.addChild("type.field", register_id, id);
     }
 }
 
@@ -725,7 +713,7 @@ fn loadModuleInstances(
     const type_id = blk: {
         var periph_it = db.types.peripherals.iterator();
         while (periph_it.next()) |entry| {
-            if (db.attrs.names.get(entry.key_ptr.*)) |entry_name|
+            if (db.attrs.name.get(entry.key_ptr.*)) |entry_name|
                 if (std.mem.eql(u8, entry_name, module_name))
                     break :blk entry.key_ptr.*;
         } else {
@@ -791,7 +779,8 @@ fn loadModuleInstanceFromPeripheral(
         const offset = try std.fmt.parseInt(u64, offset_str, 0);
         try db.addOffset(id, offset);
     } else {
-        unreachable;
+        return error.Todo;
+        //unreachable;
         //var register_group_it = node.iterate(&.{}, "register-group");
         //while (register_group_it.next()) |register_group_node|
         //    loadRegisterGroupInstance(db, register_group_node, id, peripheral_type_id) catch {
@@ -829,7 +818,7 @@ fn loadModuleInstanceFromRegisterGroup(
         var it = register_group_set.iterator();
         break :blk while (it.next()) |entry| {
             const register_group_id = entry.key_ptr.*;
-            const register_group_name = db.attrs.names.get(register_group_id) orelse continue;
+            const register_group_name = db.attrs.name.get(register_group_id) orelse continue;
             if (std.mem.eql(u8, name_in_module, register_group_name))
                 break register_group_id;
         } else return error.MissingRegisterGroup;
@@ -889,7 +878,7 @@ fn loadRegisterGroupInstance(
             return error.MissingRegisterGroupType).iterator();
 
         while (type_it.next()) |entry| {
-            if (db.attrs.names.get(entry.key_ptr.*)) |entry_name|
+            if (db.attrs.name.get(entry.key_ptr.*)) |entry_name|
                 if (std.mem.eql(u8, entry_name, name_in_module))
                     break :blk entry.key_ptr.*;
         } else return error.MissingRegisterGroupType;
@@ -991,7 +980,10 @@ const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectEqualStrings = std.testing.expectEqualStrings;
 
-test "register with bitfields and enum" {
+const testing = @import("testing.zig");
+const expectAttr = testing.expectAttr;
+
+test "atdf.register with bitfields and enum" {
     const text =
         \\<avr-tools-device-file>
         \\  <modules>
@@ -1038,53 +1030,42 @@ test "register with bitfields and enum" {
     // =========================
     const enum_id = try db.getEntityIdByName("type.enum", "RTC_PRESCALER");
 
-    try expect(db.attrs.descriptions.contains(enum_id));
+    try expectAttr(db, "description", "Prescaling Factor select", enum_id);
     try expect(db.children.enum_fields.contains(enum_id));
-    try expectEqualStrings("Prescaling Factor select", db.attrs.descriptions.get(enum_id).?);
 
     // DIV1 enum field checks
     // ======================
     const div1_id = try db.getEntityIdByName("type.enum_field", "DIV1");
 
-    try expect(db.attrs.descriptions.contains(div1_id));
-    try expectEqualStrings("RTC Clock / 1", db.attrs.descriptions.get(div1_id).?);
+    try expectAttr(db, "description", "RTC Clock / 1", div1_id);
     try expectEqual(@as(u32, 0), db.types.enum_fields.get(div1_id).?);
 
     // DIV2 enum field checks
     // ======================
     const div2_id = try db.getEntityIdByName("type.enum_field", "DIV2");
 
-    try expect(db.attrs.descriptions.contains(div2_id));
-    try expectEqualStrings("RTC Clock / 2", db.attrs.descriptions.get(div2_id).?);
+    try expectAttr(db, "description", "RTC Clock / 2", div2_id);
     try expectEqual(@as(u32, 1), db.types.enum_fields.get(div2_id).?);
 
     // CTRLA register checks
     // ===============
     const register_id = try db.getEntityIdByName("type.register", "CTRLA");
 
-    // attributes/chidren CTRLA should have
-    try expect(db.attrs.names.contains(register_id));
-    try expect(db.attrs.descriptions.contains(register_id));
-    try expect(db.attrs.offsets.contains(register_id));
-    try expect(db.attrs.sizes.contains(register_id));
-    try expect(db.attrs.reset_values.contains(register_id));
-    try expect(db.children.fields.contains(register_id));
-
     // access is read-write, so its entry is omitted (we assume read-write by default)
     try expect(!db.attrs.access.contains(register_id));
 
     // check name and description
-    try expectEqualStrings("CTRLA", db.attrs.names.get(register_id).?);
-    try expectEqualStrings("Control A", db.attrs.descriptions.get(register_id).?);
+    try expectAttr(db, "name", "CTRLA", register_id);
+    try expectAttr(db, "description", "Control A", register_id);
 
     // reset value of the register is 0 (initval attribute)
-    try expectEqual(@as(u64, 0), db.attrs.reset_values.get(register_id).?);
+    try expectAttr(db, "reset_value", 0, register_id);
 
     // byte offset is 0
-    try expectEqual(@as(u64, 0), db.attrs.offsets.get(register_id).?);
+    try expectAttr(db, "offset", 0, register_id);
 
     // size of register is 8 bits, note that ATDF measures in bytes
-    try expectEqual(@as(u64, 8), db.attrs.sizes.get(register_id).?);
+    try expectAttr(db, "size", 8, register_id);
 
     // there will 4 registers total, they will all be children of the one register
     try expectEqual(@as(usize, 4), db.types.fields.count());
@@ -1095,63 +1076,51 @@ test "register with bitfields and enum" {
     const rtcen_id = try db.getEntityIdByName("type.field", "RTCEN");
 
     // attributes RTCEN should/shouldn't have
-    try expect(db.attrs.descriptions.contains(rtcen_id));
-    try expect(db.attrs.offsets.contains(rtcen_id));
-    try expect(db.attrs.sizes.contains(rtcen_id));
     try expect(!db.attrs.access.contains(rtcen_id));
 
-    try expectEqualStrings("Enable", db.attrs.descriptions.get(rtcen_id).?);
-    try expectEqual(@as(u64, 0), db.attrs.offsets.get(rtcen_id).?);
-    try expectEqual(@as(u64, 1), db.attrs.sizes.get(rtcen_id).?);
+    try expectAttr(db, "description", "Enable", rtcen_id);
+    try expectAttr(db, "offset", 0, rtcen_id);
+    try expectAttr(db, "size", 1, rtcen_id);
 
     // CORREN field checks
     // ============
     const corren_id = try db.getEntityIdByName("type.field", "CORREN");
 
     // attributes CORREN should/shouldn't have
-    try expect(db.attrs.descriptions.contains(corren_id));
-    try expect(db.attrs.offsets.contains(corren_id));
-    try expect(db.attrs.sizes.contains(corren_id));
     try expect(!db.attrs.access.contains(corren_id));
 
-    try expectEqualStrings("Correction enable", db.attrs.descriptions.get(corren_id).?);
-    try expectEqual(@as(u64, 2), db.attrs.offsets.get(corren_id).?);
-    try expectEqual(@as(u64, 1), db.attrs.sizes.get(corren_id).?);
+    try expectAttr(db, "description", "Correction enable", corren_id);
+    try expectAttr(db, "offset", 2, corren_id);
+    try expectAttr(db, "size", 1, corren_id);
 
     // PRESCALER field checks
     // ============
     const prescaler_id = try db.getEntityIdByName("type.field", "PRESCALER");
 
     // attributes PRESCALER should/shouldn't have
-    try expect(db.attrs.descriptions.contains(prescaler_id));
-    try expect(db.attrs.offsets.contains(prescaler_id));
-    try expect(db.attrs.sizes.contains(prescaler_id));
-    try expect(db.attrs.enums.contains(prescaler_id));
+    try expect(db.attrs.@"enum".contains(prescaler_id));
     try expect(!db.attrs.access.contains(prescaler_id));
 
-    try expectEqualStrings("Prescaling Factor", db.attrs.descriptions.get(prescaler_id).?);
-    try expectEqual(@as(u64, 3), db.attrs.offsets.get(prescaler_id).?);
-    try expectEqual(@as(u64, 4), db.attrs.sizes.get(prescaler_id).?);
+    try expectAttr(db, "description", "Prescaling Factor", prescaler_id);
+    try expectAttr(db, "offset", 3, prescaler_id);
+    try expectAttr(db, "size", 4, prescaler_id);
 
     // this field has an enum value
-    try expectEqual(enum_id, db.attrs.enums.get(prescaler_id).?);
+    try expectEqual(enum_id, db.attrs.@"enum".get(prescaler_id).?);
 
     // RUNSTDBY field checks
     // ============
     const runstdby_id = try db.getEntityIdByName("type.field", "RUNSTDBY");
 
     // attributes RUNSTDBY should/shouldn't have
-    try expect(db.attrs.descriptions.contains(runstdby_id));
-    try expect(db.attrs.offsets.contains(runstdby_id));
-    try expect(db.attrs.sizes.contains(runstdby_id));
     try expect(!db.attrs.access.contains(runstdby_id));
 
-    try expectEqualStrings("Run In Standby", db.attrs.descriptions.get(runstdby_id).?);
-    try expectEqual(@as(u64, 7), db.attrs.offsets.get(runstdby_id).?);
-    try expectEqual(@as(u64, 1), db.attrs.sizes.get(runstdby_id).?);
+    try expectAttr(db, "description", "Run In Standby", runstdby_id);
+    try expectAttr(db, "offset", 7, runstdby_id);
+    try expectAttr(db, "size", 1, runstdby_id);
 }
 
-test "register with mode" {
+test "atdf.register with mode" {
     const text =
         \\<avr-tools-device-file>
         \\  <modules>
@@ -1200,9 +1169,7 @@ test "register with mode" {
     };
 
     // the name of the mode is 'SINGLE'
-    try expect(db.attrs.names.contains(register_id));
-    const mode_name = db.attrs.names.get(mode_id).?;
-    try expectEqualStrings("SINGLE", mode_name);
+    try expectAttr(db, "name", "SINGLE", mode_id);
 
     // the register group should be flattened, so the mode should be a child of
     // the peripheral
@@ -1217,7 +1184,7 @@ test "register with mode" {
     try expect(peripheral_modes.contains(mode_id));
 }
 
-test "instance of register group" {
+test "atdf.instance of register group" {
     const text =
         \\<avr-tools-device-file>
         \\  <devices>
@@ -1315,19 +1282,21 @@ test "instance of register group" {
     try expectEqual(@as(usize, 1), db.instances.devices.count());
 
     const portb_instance_id = try db.getEntityIdByName("instance.peripheral", "PORTB");
-    try expect(db.attrs.offsets.contains(portb_instance_id));
-    try expectEqual(@as(u64, 0x23), db.attrs.offsets.get(portb_instance_id).?);
+    try expectAttr(db, "offset", 0x23, portb_instance_id);
 
     // Register assertions
     const portb_id = try db.getEntityIdByName("type.register", "PORTB");
-    try expect(db.attrs.offsets.contains(portb_id));
-    try expectEqual(@as(u64, 0x2), db.attrs.offsets.get(portb_id).?);
+    try expectAttr(db, "offset", 0x2, portb_id);
 
     const ddrb_id = try db.getEntityIdByName("type.register", "DDRB");
-    try expect(db.attrs.offsets.contains(ddrb_id));
-    try expectEqual(@as(u64, 0x1), db.attrs.offsets.get(ddrb_id).?);
+    try expectAttr(db, "offset", 0x1, ddrb_id);
 
     const pinb_id = try db.getEntityIdByName("type.register", "PINB");
-    try expect(db.attrs.offsets.contains(pinb_id));
-    try expectEqual(@as(u64, 0x0), db.attrs.offsets.get(pinb_id).?);
+    try expectAttr(db, "offset", 0x0, pinb_id);
+}
+
+test "log2_int_ceil" {
+    try expectEqual(@as(u64, 6), std.math.log2_int(u64, 90));
+    try expectEqual(@as(u64, 7), std.math.log2_int(u64, 255));
+    try expectEqual(@as(u64, 8), std.math.log2_int(u64, 256));
 }
