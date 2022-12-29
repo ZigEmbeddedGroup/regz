@@ -14,15 +14,7 @@ pub const pkgs = struct {
         },
     };
 
-    pub const mecha = Pkg{
-        .name = "mecha",
-        .source = FileSource{
-            .path = ".gyro/mecha-Hejsil-github.com-fe2fcf2b/pkg/mecha.zig",
-        },
-    };
-
     pub fn addAllTo(artifact: *std.build.LibExeObjStep) void {
         artifact.addPackage(pkgs.clap);
-        artifact.addPackage(pkgs.mecha);
     }
 };
