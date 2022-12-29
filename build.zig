@@ -48,7 +48,6 @@ pub const Regz = struct {
         exe.setBuildMode(mode);
         exe.addOptions("build_options", build_options);
         exe.addPackagePath("clap", comptime root() ++ pkgs.clap.source.path);
-        exe.addPackagePath("mecha", comptime root() ++ pkgs.mecha.source.path);
         xml.link(exe);
 
         var regz = builder.allocator.create(Regz) catch unreachable;
