@@ -363,7 +363,15 @@ fn loadEnumeratedValues(ctx: *Context, node: xml.Node, field_id: EntityId) !void
     const db = ctx.db;
 
     assert(db.entityIs("type.field", field_id));
-    const id = try db.createEnum(field_id, .{
+    const peripheral_id = peripheral_id: {
+        var id = field_id;
+        break :peripheral_id while (db.attrs.parent.get(id)) |parent_id| : (id = parent_id) {
+            if (.peripheral == db.getEntityType(parent_id).?)
+                break parent_id;
+        } else return error.NoPeripheralFound;
+    };
+
+    const id = try db.createEnum(peripheral_id, .{
         .name = node.getValue("name"),
         .size = db.attrs.size.get(field_id),
     });
@@ -1110,6 +1118,7 @@ test "svd.field with enum value" {
     var db = try Database.initFromSvd(std.testing.allocator, doc);
     defer db.deinit();
 
+    const peripheral_id = try db.getEntityIdByName("type.peripheral", "TEST_PERIPHERAL");
     const field_id = try db.getEntityIdByName("type.field", "TEST_FIELD");
     const enum_id = try db.getEntityIdByName("type.enum", "TEST_ENUM");
 
@@ -1118,7 +1127,7 @@ test "svd.field with enum value" {
 
     // enum
     try expectAttr(db, "size", 8, enum_id);
-    try expectAttr(db, "parent", field_id, enum_id);
+    try expectAttr(db, "parent", peripheral_id, enum_id);
 
     const enum_field1_id = try db.getEntityIdByName("type.enum_field", "TEST_ENUM_FIELD1");
     try expectEqual(@as(u32, 0), db.types.enum_fields.get(enum_field1_id).?);
@@ -1168,6 +1177,7 @@ test "svd.peripheral with dimElementGroup" {
 }
 
 test "svd.peripheral with dimElementgroup, dimIndex set" {
+    std.testing.log_level = .err;
     const text =
         \\<device>
         \\  <name>TEST_DEVICE</name>
@@ -1238,6 +1248,7 @@ test "svd.register with dimElementGroup" {
 }
 
 test "svd.register with dimElementGroup, dimIncrement != size" {
+    std.testing.log_level = .err;
     const text =
         \\<device>
         \\  <name>TEST_DEVICE</name>
