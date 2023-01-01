@@ -372,7 +372,8 @@ fn loadEnumeratedValues(ctx: *Context, node: xml.Node, field_id: EntityId) !void
     };
 
     const id = try db.createEnum(peripheral_id, .{
-        .name = node.getValue("name"),
+        // TODO: find solution to potential name collisions for enums at the peripheral level.
+        //.name = node.getValue("name"),
         .size = db.attrs.size.get(field_id),
     });
     errdefer db.destroyEntity(id);
@@ -448,6 +449,7 @@ pub const DimableIdentifier = struct {
 /// pattern: [0-9]+\-[0-9]+|[A-Z]-[A-Z]|[_0-9a-zA-Z]+(,\s*[_0-9a-zA-Z]+)+
 pub const DimIndex = struct {};
 
+const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectError = std.testing.expectError;
 
@@ -1120,7 +1122,11 @@ test "svd.field with enum value" {
 
     const peripheral_id = try db.getEntityIdByName("type.peripheral", "TEST_PERIPHERAL");
     const field_id = try db.getEntityIdByName("type.field", "TEST_FIELD");
-    const enum_id = try db.getEntityIdByName("type.enum", "TEST_ENUM");
+
+    // TODO: figure out a name collision avoidance mechanism for SVD. For now
+    // we'll make all SVD enums anonymous
+    const enum_id = db.attrs.@"enum".get(field_id).?;
+    try expect(!db.attrs.name.contains(enum_id));
 
     // field
     try expectAttr(db, "enum", enum_id, field_id);
