@@ -282,11 +282,11 @@ pub fn initFromDslite(allocator: Allocator, doc: xml.Doc) !Database {
     return db;
 }
 
-pub fn initFromJson(allocator: Allocator, reader: anytype) !Database {
+pub fn initFromJson(allocator: Allocator, text: []const u8) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 
-    try regzon.loadIntoDb(&db, reader);
+    try regzon.loadIntoDb(&db, text);
     return db;
 }
 

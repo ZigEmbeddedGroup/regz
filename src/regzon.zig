@@ -8,12 +8,181 @@ const Database = @import("Database.zig");
 const EntityId = Database.EntityId;
 const PeripheralInstance = Database.PeripheralInstance;
 
+const TypeOfField = @import("testing.zig").TypeOfField;
+
 const log = std.log.scoped(.regzon);
 
-pub fn loadIntoDb(db: *Database, reader: anytype) !void {
-    _ = db;
-    _ = reader;
-    return error.Todo;
+pub const schema_version = "0.1.0";
+
+const LoadContext = struct {
+    db: *Database,
+
+    fn deinit(ctx: *LoadContext) void {
+        _ = ctx;
+    }
+};
+
+fn getObject(val: json.Value) !json.ObjectMap {
+    return switch (val) {
+        .Object => |obj| obj,
+        else => return error.NotJsonObject,
+    };
+}
+
+// TODO: handle edge cases
+fn getIntegerFromObject(obj: json.ObjectMap, comptime T: type, key: []const u8) !?T {
+    return switch (obj.get(key) orelse return null) {
+        .Integer => |num| @intCast(T, num),
+        else => return error.NotJsonInteger,
+    };
+}
+
+fn getStringFromObject(obj: json.ObjectMap, key: []const u8) !?[]const u8 {
+    return switch (obj.get(key) orelse return null) {
+        .String => |str| str,
+        else => return error.NotJsonString,
+    };
+}
+
+pub fn loadIntoDb(db: *Database, text: []const u8) !void {
+    var parser = json.Parser.init(db.gpa, false);
+    defer parser.deinit();
+
+    var tree = try parser.parse(text);
+    defer tree.deinit();
+
+    if (tree.root != .Object)
+        return error.NotJsonObject;
+
+    var ctx = LoadContext{ .db = db };
+    defer ctx.deinit();
+
+    if (tree.root.Object.get("types")) |types|
+        try loadTypes(&ctx, try getObject(types));
+
+    if (tree.root.Object.get("devices")) |devices|
+        try loadDevices(&ctx, try getObject(devices));
+}
+
+fn loadTypes(ctx: *LoadContext, types: json.ObjectMap) !void {
+    if (types.get("peripherals")) |peripherals|
+        try loadPeripherals(ctx, try getObject(peripherals));
+}
+
+fn loadPeripherals(ctx: *LoadContext, peripherals: json.ObjectMap) !void {
+    var it = peripherals.iterator();
+    while (it.next()) |entry| {
+        const name = entry.key_ptr.*;
+        const peripheral = entry.value_ptr.*;
+        try loadPeripheral(ctx, name, try getObject(peripheral));
+    }
+}
+
+fn loadPeripheral(
+    ctx: *LoadContext,
+    name: []const u8,
+    peripheral: json.ObjectMap,
+) !void {
+    log.debug("loading peripheral: {s}", .{name});
+    const db = ctx.db;
+    const id = try db.createPeripheral(.{
+        .name = name,
+        .size = if (peripheral.get("size")) |size_val|
+            switch (size_val) {
+                .Integer => |num| @intCast(u64, num),
+                else => return error.SizeNotInteger,
+            }
+        else
+            null,
+    });
+    errdefer db.destroyEntity(id);
+
+    if (peripheral.get("children")) |children| {
+        const obj = try getObject(children);
+        if (obj.get("registers")) |registers|
+            try loadRegisters(ctx, id, try getObject(registers));
+
+        // TODO: other types of children
+    }
+}
+
+fn loadRegisters(
+    ctx: *LoadContext,
+    parent_id: EntityId,
+    registers: json.ObjectMap,
+) !void {
+    var it = registers.iterator();
+    while (it.next()) |entry| {
+        const name = entry.key_ptr.*;
+        const register = entry.value_ptr.*;
+        try loadRegister(ctx, parent_id, name, try getObject(register));
+    }
+}
+
+fn loadRegister(
+    ctx: *LoadContext,
+    parent_id: EntityId,
+    name: []const u8,
+    register: json.ObjectMap,
+) !void {
+    const db = ctx.db;
+    const id = try db.createRegister(parent_id, .{
+        .name = name,
+        .description = try getStringFromObject(register, "description"),
+        .offset = (try getIntegerFromObject(register, u64, "offset")) orelse return error.MissingRegisterOffset,
+        .size = (try getIntegerFromObject(register, u64, "size")) orelse return error.MissingRegisterSize,
+        .count = try getIntegerFromObject(register, u64, "count"),
+        .access = if (try getStringFromObject(register, "access")) |access_str|
+            std.meta.stringToEnum(Database.Access, access_str)
+        else
+            null,
+        .reset_mask = try getIntegerFromObject(register, u64, "reset_mask"),
+        .reset_value = try getIntegerFromObject(register, u64, "reset_value"),
+    });
+    errdefer db.destroyEntity(id);
+
+    if (register.get("children")) |children| {
+        const obj = try getObject(children);
+        if (obj.get("fields")) |fields|
+            try loadFields(ctx, id, try getObject(fields));
+
+        // TODO: other types of children
+    }
+}
+
+fn loadFields(
+    ctx: *LoadContext,
+    parent_id: EntityId,
+    fields: json.ObjectMap,
+) !void {
+    var it = fields.iterator();
+    while (it.next()) |entry| {
+        const name = entry.key_ptr.*;
+        const field = entry.value_ptr.*;
+        try loadField(ctx, parent_id, name, try getObject(field));
+    }
+}
+
+fn loadField(
+    ctx: *LoadContext,
+    parent_id: EntityId,
+    name: []const u8,
+    field: json.ObjectMap,
+) !void {
+    const db = ctx.db;
+    const id = try db.createField(parent_id, .{
+        .name = name,
+        .description = try getStringFromObject(field, "description"),
+        .offset = (try getIntegerFromObject(field, u64, "offset")) orelse return error.MissingRegisterOffset,
+        .size = (try getIntegerFromObject(field, u64, "size")) orelse return error.MissingRegisterSize,
+        // TODO: .enum_id
+    });
+    errdefer db.destroyEntity(id);
+}
+
+fn loadDevices(ctx: *LoadContext, devices_obj: json.ObjectMap) !void {
+    _ = ctx;
+    _ = devices_obj;
 }
 
 pub fn toJson(db: Database) !json.ValueTree {
@@ -38,10 +207,14 @@ pub fn toJson(db: Database) !json.ValueTree {
             entry.key_ptr.*,
         );
 
+    try root.put("version", .{ .String = schema_version });
     try populateTypes(db, &arena, &types);
-    try root.put("types", .{ .Object = types });
+    if (types.count() > 0)
+        try root.put("types", .{ .Object = types });
 
-    try root.put("devices", .{ .Object = devices });
+    if (devices.count() > 0)
+        try root.put("devices", .{ .Object = devices });
+
     return json.ValueTree{
         .arena = arena,
         .root = .{ .Object = root },
@@ -54,14 +227,18 @@ fn populateTypes(
     types: *json.ObjectMap,
 ) !void {
     const allocator = arena.allocator();
+    var peripherals = json.ObjectMap.init(allocator);
     var it = db.types.peripherals.iterator();
     while (it.next()) |entry| {
         const periph_id = entry.key_ptr.*;
         const name = db.attrs.name.get(periph_id) orelse continue;
         var typ = json.ObjectMap.init(allocator);
         try populateType(db, arena, periph_id, &typ);
-        try types.put(name, .{ .Object = typ });
+        try peripherals.put(name, .{ .Object = typ });
     }
+
+    if (peripherals.count() > 0)
+        try types.put("peripherals", .{ .Object = peripherals });
 }
 
 fn populateType(
@@ -252,10 +429,81 @@ fn populatePeripheral(
     try peripherals.put(name, .{ .Object = peripheral });
 }
 
+const expect = std.testing.expect;
+const expectEqual = std.testing.expectEqual;
+const expectEqualStrings = std.testing.expectEqualStrings;
+
 // =============================================================================
 // loadIntoDb Tests
 // =============================================================================
+test "regzon.load.empty" {
+    var db = try Database.initFromJson(std.testing.allocator, "{}");
+    defer db.deinit();
+}
 
 // =============================================================================
 // toJson Tests
 // =============================================================================
+const tests = @import("output_tests.zig");
+const test_stringify_opts = .{
+    .whitespace = .{
+        .indent_level = 0,
+        .indent = .{ .Space = 2 },
+    },
+};
+
+test "regzon.jsonStringify.empty" {
+    var db = try Database.init(std.testing.allocator);
+    defer db.deinit();
+
+    var buffer = std.ArrayList(u8).init(std.testing.allocator);
+    defer buffer.deinit();
+
+    try db.jsonStringify(test_stringify_opts, buffer.writer());
+    try expectEqualStrings(
+        \\{
+        \\  "version": "
+    ++ schema_version ++
+        \\"
+        \\}
+    , buffer.items);
+}
+
+test "regzon.jsonStringify.peripheral type with register and field" {
+    var db = try tests.peripheralTypeWithRegisterAndField(std.testing.allocator);
+    defer db.deinit();
+
+    var buffer = std.ArrayList(u8).init(std.testing.allocator);
+    defer buffer.deinit();
+
+    try db.jsonStringify(test_stringify_opts, buffer.writer());
+    try expectEqualStrings(
+        \\{
+        \\  "version": "
+    ++ schema_version ++
+        \\",
+        \\  "types": {
+        \\    "peripherals": {
+        \\      "TEST_PERIPHERAL": {
+        \\        "children": {
+        \\          "registers": {
+        \\            "TEST_REGISTER": {
+        \\              "offset": 0,
+        \\              "size": 32,
+        \\              "children": {
+        \\                "fields": {
+        \\                  "TEST_FIELD": {
+        \\                    "offset": 0,
+        \\                    "size": 1
+        \\                  }
+        \\                }
+        \\              }
+        \\            }
+        \\          }
+        \\        }
+        \\      }
+        \\    }
+        \\  }
+        \\}
+    , buffer.items);
+}
