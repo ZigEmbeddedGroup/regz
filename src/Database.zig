@@ -805,7 +805,6 @@ pub fn getEntityIdByName(
     comptime var group = (tok_it.next() orelse unreachable) ++ "s";
     comptime var table = (tok_it.next() orelse unreachable) ++ "s";
 
-    log.debug("group: {s}, table: {s}", .{ group, table });
     var it = @field(@field(db, group), table).iterator();
     return while (it.next()) |entry| {
         const entry_id = entry.key_ptr.*;
