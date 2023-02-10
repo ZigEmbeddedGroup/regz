@@ -88,7 +88,7 @@ pub fn addNvicFields(db: *Database, device_id: EntityId) !void {
 
         const nvic_prio_bits = try parseInt(
             u32,
-            db.instances.devices.get(device_id).?.properties.get("cpu.nvic_prio_bits").?,
+            db.instances.devices.get(device_id).?.properties.get("cpu.nvic_prio_bits") orelse return error.MissingNvicPrioBits,
             10,
         );
         if (nvic_prio_bits == 0) continue;
