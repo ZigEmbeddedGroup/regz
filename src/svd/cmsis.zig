@@ -70,7 +70,7 @@ pub fn addCoreRegisters(db: *Database, cpu_name: Database.Arch, device_id: Entit
     });
 
     if (db.instances.devices.get(device_id)) |cpu| {
-        if (cpu.properties.get("cpu.vendor_systick_config") != null)
+        if (!(try hasVendorSystickConfig(cpu)))
             try addSysTickRegisters(db, device_id, type_id);
 
         inline for (@typeInfo(cores).Struct.decls) |decl|
@@ -85,3 +85,15 @@ pub fn addNvicFields(db: *Database, cpu_name: Database.Arch, device_id: EntityId
                 try @field(cores, decl.name).addNvicFields(db, device_id);
 
 }
+
+fn hasVendorSystickConfig(cpu: anytype) !bool {
+    if (cpu.properties.get("cpu.vendor_systick_config")) |systick| {
+        if (std.mem.eql(u8, systick, "0") or std.mem.eql(u8, systick, "false")) {
+            return false;
+        } else {
+            return true;
+        }
+    }
+    return error.MissingVendorSystickConfig;
+}
+
