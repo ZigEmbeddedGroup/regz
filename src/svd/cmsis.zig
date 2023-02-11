@@ -88,10 +88,12 @@ pub fn addNvicFields(db: *Database, cpu_name: Database.Arch, device_id: EntityId
 
 fn hasVendorSystickConfig(cpu: anytype) !bool {
     if (cpu.properties.get("cpu.vendor_systick_config")) |systick| {
-        if (std.mem.eql(u8, systick, "0") or std.mem.eql(u8, systick, "false")) {
+        if (std.mem.eql(u8, systick, "false") or std.mem.eql(u8, systick, "0")) {
             return false;
-        } else {
+        } else if (std.mem.eql(u8, systick, "true") or std.mem.eql(u8, systick, "1")) {
             return true;
+        } else {
+            return error.BadVendorSystickConfigRepresentation;
         }
     }
     return error.MissingVendorSystickConfig;
