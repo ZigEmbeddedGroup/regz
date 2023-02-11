@@ -80,10 +80,9 @@ pub fn addCoreRegisters(db: *Database, cpu_name: Database.Arch, device_id: Entit
 }
 
 pub fn addNvicFields(db: *Database, cpu_name: Database.Arch, device_id: EntityId) !void {
-        inline for (@typeInfo(cores).Struct.decls) |decl|
-            if (cpu_name == @field(Database.Arch, decl.name))
-                try @field(cores, decl.name).addNvicFields(db, device_id);
-
+    inline for (@typeInfo(cores).Struct.decls) |decl|
+        if (cpu_name == @field(Database.Arch, decl.name))
+            try @field(cores, decl.name).addNvicFields(db, device_id);
 }
 
 fn hasVendorSystickConfig(cpu: anytype) !bool {
@@ -98,4 +97,3 @@ fn hasVendorSystickConfig(cpu: anytype) !bool {
     }
     return error.MissingVendorSystickConfig;
 }
-
