@@ -74,7 +74,7 @@ pub const Regz = struct {
         const basename = std.fs.path.basename(schema_path);
         const extension = std.fs.path.extension(basename);
         const destination_path = std.fs.path.join(regz.builder.allocator, &.{
-            regz.builder.cache_root,
+            regz.builder.cache_root.path.?,
             "regz",
             std.mem.join(regz.builder.allocator, "", &.{
                 basename[0 .. basename.len - extension.len],
