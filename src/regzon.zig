@@ -108,9 +108,9 @@ fn idToRef(
     defer ref.deinit();
 
     const writer = ref.writer();
-    const root_type = db.getEntityType(ids.items[0]).?;
+    const root_type = db.get_entity_type(ids.items[0]).?;
 
-    if (root_type.isInstance())
+    if (root_type.is_instance())
         //try writer.writeAll("instances")
         @panic("TODO")
     else
@@ -122,7 +122,7 @@ fn idToRef(
     });
 
     for (ids.items[1..]) |id| {
-        const entity_type = db.getEntityType(id).?;
+        const entity_type = db.get_entity_type(id).?;
         try writer.print(".children.{s}.{s}", .{
             entityTypeToString(entity_type),
             std.zig.fmtId(db.attrs.name.get(id) orelse return error.MissingName),
@@ -255,7 +255,7 @@ fn loadPeripheral(
 ) !void {
     log.debug("loading peripheral: {s}", .{name});
     const db = ctx.db;
-    const id = try db.createPeripheral(.{
+    const id = try db.create_peripheral(.{
         .name = name,
         .description = try getStringFromObject(peripheral, "description"),
         .size = if (peripheral.get("size")) |size_val|
@@ -266,7 +266,7 @@ fn loadPeripheral(
         else
             null,
     });
-    errdefer db.destroyEntity(id);
+    errdefer db.destroy_entity(id);
 
     if (peripheral.get("children")) |children|
         try loadChildren(ctx, id, try getObject(children));
@@ -360,7 +360,7 @@ fn loadMode(
     name: []const u8,
     mode: json.ObjectMap,
 ) LoadError!void {
-    _ = try ctx.db.createMode(parent_id, .{
+    _ = try ctx.db.create_mode(parent_id, .{
         .name = name,
         .description = try getStringFromObject(mode, "description"),
         .value = (try getStringFromObject(mode, "value")) orelse return error.MissingModeValue,
@@ -377,11 +377,11 @@ fn loadRegisterGroup(
     log.debug("load register group", .{});
     const db = ctx.db;
     // TODO: probably more
-    const id = try db.createRegisterGroup(parent_id, .{
+    const id = try db.create_register_group(parent_id, .{
         .name = name,
         .description = try getStringFromObject(register_group, "description"),
     });
-    errdefer db.destroyEntity(id);
+    errdefer db.destroy_entity(id);
 
     if (register_group.get("children")) |children|
         try loadChildren(ctx, id, try getObject(children));
@@ -394,7 +394,7 @@ fn loadRegister(
     register: json.ObjectMap,
 ) LoadError!void {
     const db = ctx.db;
-    const id = try db.createRegister(parent_id, .{
+    const id = try db.create_register(parent_id, .{
         .name = name,
         .description = try getStringFromObject(register, "description"),
         .offset = (try getIntegerFromObject(register, u64, "offset")) orelse return error.MissingRegisterOffset,
@@ -407,7 +407,7 @@ fn loadRegister(
         .reset_mask = try getIntegerFromObject(register, u64, "reset_mask"),
         .reset_value = try getIntegerFromObject(register, u64, "reset_value"),
     });
-    errdefer db.destroyEntity(id);
+    errdefer db.destroy_entity(id);
 
     if (register.get("modes")) |modes|
         try loadModes(ctx, id, try getArray(modes));
@@ -445,14 +445,14 @@ fn loadField(
     field: json.ObjectMap,
 ) LoadError!void {
     const db = ctx.db;
-    const id = try db.createField(parent_id, .{
+    const id = try db.create_field(parent_id, .{
         .name = name,
         .description = try getStringFromObject(field, "description"),
         .offset = (try getIntegerFromObject(field, u64, "offset")) orelse return error.MissingRegisterOffset,
         .size = (try getIntegerFromObject(field, u64, "size")) orelse return error.MissingRegisterSize,
         .count = try getIntegerFromObject(field, u64, "count"),
     });
-    errdefer db.destroyEntity(id);
+    errdefer db.destroy_entity(id);
 
     if (field.get("enum")) |enum_val|
         switch (enum_val) {
@@ -463,7 +463,7 @@ fn loadField(
                 const peripheral_id = peripheral_id: {
                     var tmp_id = id;
                     break :peripheral_id while (db.attrs.parent.get(tmp_id)) |next_id| : (tmp_id = next_id) {
-                        if (.peripheral == db.getEntityType(next_id).?)
+                        if (.peripheral == db.get_entity_type(next_id).?)
                             break next_id;
                     } else return error.NoPeripheralFound;
                 };
@@ -494,12 +494,12 @@ fn loadEnumBase(
     enumeration: json.ObjectMap,
 ) LoadError!EntityId {
     const db = ctx.db;
-    const id = try db.createEnum(parent_id, .{
+    const id = try db.create_enum(parent_id, .{
         .name = name,
         .description = try getStringFromObject(enumeration, "description"),
         .size = (try getIntegerFromObject(enumeration, u64, "size")) orelse return error.MissingEnumSize,
     });
-    errdefer db.destroyEntity(id);
+    errdefer db.destroy_entity(id);
 
     if (enumeration.get("children")) |children|
         try loadChildren(ctx, id, try getObject(children));
@@ -515,7 +515,7 @@ fn loadEnumField(
 ) LoadError!void {
     const db = ctx.db;
 
-    const id = try db.createEnumField(parent_id, .{
+    const id = try db.create_enum_field(parent_id, .{
         .name = name,
         .description = try getStringFromObject(enum_field, "description"),
         .value = (try getIntegerFromObject(enum_field, u32, "value")) orelse return error.MissingEnumFieldValue,
@@ -537,7 +537,7 @@ fn loadDevices(ctx: *LoadContext, devices: json.ObjectMap) !void {
 fn loadDevice(ctx: *LoadContext, name: []const u8, device: json.ObjectMap) !void {
     log.debug("loading device: {s}", .{name});
     const db = ctx.db;
-    const id = try db.createDevice(.{
+    const id = try db.create_device(.{
         .name = name,
         .description = try getStringFromObject(device, "description"),
         .arch = if (device.get("arch")) |arch_val|
@@ -548,7 +548,7 @@ fn loadDevice(ctx: *LoadContext, name: []const u8, device: json.ObjectMap) !void
         else
             .unknown,
     });
-    errdefer db.destroyEntity(id);
+    errdefer db.destroy_entity(id);
 
     if (device.get("properties")) |properties|
         try loadProperties(ctx, id, try getObject(properties));
@@ -567,7 +567,7 @@ fn loadProperties(ctx: *LoadContext, device_id: EntityId, properties: json.Objec
             else => return error.InvalidJsonType,
         };
 
-        try db.addDeviceProperty(device_id, key, value);
+        try db.add_device_property(device_id, key, value);
     }
 }
 
@@ -577,7 +577,7 @@ fn loadInterrupt(
     name: []const u8,
     interrupt: json.ObjectMap,
 ) LoadError!void {
-    _ = try ctx.db.createInterrupt(device_id, .{
+    _ = try ctx.db.create_interrupt(device_id, .{
         .name = name,
         .description = try getStringFromObject(interrupt, "description"),
         .index = (try getIntegerFromObject(interrupt, i32, "index")) orelse return error.MissingInterruptIndex,
@@ -593,7 +593,7 @@ fn loadPeripheralInstance(
     const db = ctx.db;
     const type_ref = (try getStringFromObject(peripheral, "type")) orelse return error.MissingInstanceType;
     const type_id = try refToId(db.*, type_ref);
-    _ = try ctx.db.createPeripheralInstance(device_id, type_id, .{
+    _ = try ctx.db.create_peripheral_instance(device_id, type_id, .{
         .name = name,
         .description = try getStringFromObject(peripheral, "description"),
         .offset = (try getIntegerFromObject(peripheral, u64, "offset")) orelse return error.MissingInstanceOffset,
@@ -791,7 +791,7 @@ fn populateDevice(
         );
 
     const arch = db.instances.devices.get(id).?.arch;
-    try device.put("arch", .{ .String = arch.toString() });
+    try device.put("arch", .{ .String = arch.to_string() });
     if (db.attrs.description.get(id)) |description|
         try device.put("description", .{ .String = description });
 
@@ -874,7 +874,7 @@ test "refToId" {
     var db = try tests.peripheralWithModes(std.testing.allocator);
     defer db.deinit();
 
-    const mode_id = try db.getEntityIdByName("type.mode", "TEST_MODE1");
+    const mode_id = try db.get_entity_id_by_name("type.mode", "TEST_MODE1");
     const mode_ref = try idToRef(std.testing.allocator, db, mode_id);
     defer std.testing.allocator.free(mode_ref);
 
@@ -888,7 +888,7 @@ test "idToRef" {
     var db = try tests.peripheralWithModes(std.testing.allocator);
     defer db.deinit();
 
-    const expected_mode_id = try db.getEntityIdByName("type.mode", "TEST_MODE1");
+    const expected_mode_id = try db.get_entity_id_by_name("type.mode", "TEST_MODE1");
     const actual_mode_id = try refToId(
         db,
         "types.peripherals.TEST_PERIPHERAL.children.modes.TEST_MODE1",
@@ -905,7 +905,7 @@ fn loadTest(comptime init: DbInitFn, input: []const u8) !void {
     defer expected.deinit();
 
     const copy = try std.testing.allocator.dupe(u8, input);
-    var actual = Database.initFromJson(std.testing.allocator, copy) catch |err| {
+    var actual = Database.init_from_json(std.testing.allocator, copy) catch |err| {
         std.testing.allocator.free(copy);
         return err;
     };
@@ -1028,7 +1028,7 @@ fn stringifyTest(comptime init: DbInitFn, expected: []const u8) !void {
         },
     };
 
-    try db.jsonStringify(test_stringify_opts, buffer.writer());
+    try db.json_stringify(test_stringify_opts, buffer.writer());
     try expectEqualStrings(expected, buffer.items);
 }
 

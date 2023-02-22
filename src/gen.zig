@@ -109,7 +109,7 @@ fn writeString(str: []const u8, writer: anytype) !void {
 }
 
 fn writeDevice(db: Database, device_id: EntityId, out_writer: anytype) !void {
-    assert(db.entityIs("instance.device", device_id));
+    assert(db.entity_is("instance.device", device_id));
     const name = db.attrs.name.get(device_id) orelse return error.MissingDeviceName;
 
     var buffer = std.ArrayList(u8).init(db.arena.allocator());
@@ -204,7 +204,7 @@ fn typesReference(db: Database, type_id: EntityId) ![]const u8 {
     try writer.writeAll("types");
 
     // determine the namespace under 'types' the reference is under
-    const root_parent_entity_type = db.getEntityType(id).?;
+    const root_parent_entity_type = db.get_entity_type(id).?;
     inline for (@typeInfo(Database.EntityType).Enum.fields) |field| {
         if (root_parent_entity_type == @field(Database.EntityType, field.name)) {
             try writer.print(".{s}s", .{field.name});
@@ -225,17 +225,17 @@ fn writeVectorTable(
     device_id: EntityId,
     out_writer: anytype,
 ) !void {
-    assert(db.entityIs("instance.device", device_id));
+    assert(db.entity_is("instance.device", device_id));
 
     var buffer = std.ArrayList(u8).init(db.arena.allocator());
     defer buffer.deinit();
 
     const writer = buffer.writer();
     const arch = db.instances.devices.get(device_id).?.arch;
-    if (arch.isArm())
-        try arm.writeInterruptVector(db, device_id, writer)
-    else if (arch.isAvr())
-        try avr.writeInterruptVector(db, device_id, writer)
+    if (arch.is_arm())
+        try arm.write_interrupt_vector(db, device_id, writer)
+    else if (arch.is_avr())
+        try avr.write_interrupt_vector(db, device_id, writer)
     else if (arch == .unknown)
         return
     else
@@ -245,7 +245,7 @@ fn writeVectorTable(
 }
 
 fn writePeripheralInstance(db: Database, instance_id: EntityId, offset: u64, out_writer: anytype) !void {
-    assert(db.entityIs("instance.peripheral", instance_id));
+    assert(db.entity_is("instance.peripheral", instance_id));
     var buffer = std.ArrayList(u8).init(db.arena.allocator());
     defer buffer.deinit();
 
@@ -351,8 +351,8 @@ fn writePeripheral(
     peripheral_id: EntityId,
     out_writer: anytype,
 ) !void {
-    assert(db.entityIs("type.peripheral", peripheral_id) or
-        db.entityIs("type.register_group", peripheral_id));
+    assert(db.entity_is("type.peripheral", peripheral_id) or
+        db.entity_is("type.register_group", peripheral_id));
 
     // peripheral types should always have a name (responsibility of parsing to get this done)
     const name = db.attrs.name.get(peripheral_id) orelse unreachable;
@@ -541,7 +541,7 @@ fn writeModeEnumAndFn(
             try components.append(token);
 
         const field_name = components.items[components.items.len - 1];
-        _ = try db.getEntityIdByName("type.field", field_name);
+        _ = try db.get_entity_id_by_name("type.field", field_name);
 
         const access_path = try std.mem.join(db.arena.allocator(), ".", components.items[1 .. components.items.len - 1]);
         try writer.writeAll("{\n");
@@ -906,7 +906,7 @@ test "gen.peripheral type with register and field" {
     var buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
-    try db.toZig(buffer.writer());
+    try db.to_zig(buffer.writer());
     try std.testing.expectEqualStrings(
         \\const micro = @import("microzig");
         \\const mmio = micro.mmio;
@@ -932,7 +932,7 @@ test "gen.peripheral instantiation" {
     var buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
-    try db.toZig(buffer.writer());
+    try db.to_zig(buffer.writer());
     try std.testing.expectEqualStrings(
         \\const micro = @import("microzig");
         \\const mmio = micro.mmio;
@@ -966,7 +966,7 @@ test "gen.peripherals with a shared type" {
     var buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
-    try db.toZig(buffer.writer());
+    try db.to_zig(buffer.writer());
     try std.testing.expectEqualStrings(
         \\const micro = @import("microzig");
         \\const mmio = micro.mmio;
@@ -1001,7 +1001,7 @@ test "gen.peripheral with modes" {
     var buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
-    try db.toZig(buffer.writer());
+    try db.to_zig(buffer.writer());
     try std.testing.expectEqualStrings(
         \\const micro = @import("microzig");
         \\const mmio = micro.mmio;
@@ -1061,7 +1061,7 @@ test "gen.peripheral with enum" {
     var buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
-    try db.toZig(buffer.writer());
+    try db.to_zig(buffer.writer());
     try std.testing.expectEqualStrings(
         \\const micro = @import("microzig");
         \\const mmio = micro.mmio;
@@ -1090,7 +1090,7 @@ test "gen.peripheral with enum, enum is exhausted of values" {
     var buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
-    try db.toZig(buffer.writer());
+    try db.to_zig(buffer.writer());
     try std.testing.expectEqualStrings(
         \\const micro = @import("microzig");
         \\const mmio = micro.mmio;
@@ -1118,7 +1118,7 @@ test "gen.field with named enum" {
     var buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
-    try db.toZig(buffer.writer());
+    try db.to_zig(buffer.writer());
     try std.testing.expectEqualStrings(
         \\const micro = @import("microzig");
         \\const mmio = micro.mmio;
@@ -1153,7 +1153,7 @@ test "gen.field with anonymous enum" {
     var buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
-    try db.toZig(buffer.writer());
+    try db.to_zig(buffer.writer());
     try std.testing.expectEqualStrings(
         \\const micro = @import("microzig");
         \\const mmio = micro.mmio;
@@ -1186,7 +1186,7 @@ test "gen.namespaced register groups" {
     var buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
-    try db.toZig(buffer.writer());
+    try db.to_zig(buffer.writer());
     try std.testing.expectEqualStrings(
         \\const micro = @import("microzig");
         \\const mmio = micro.mmio;
@@ -1228,7 +1228,7 @@ test "gen.peripheral with reserved register" {
     var buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
-    try db.toZig(buffer.writer());
+    try db.to_zig(buffer.writer());
     try std.testing.expectEqualStrings(
         \\const micro = @import("microzig");
         \\const mmio = micro.mmio;
@@ -1261,7 +1261,7 @@ test "gen.peripheral with count" {
     var buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
-    try db.toZig(buffer.writer());
+    try db.to_zig(buffer.writer());
     try std.testing.expectEqualStrings(
         \\const micro = @import("microzig");
         \\const mmio = micro.mmio;
@@ -1294,7 +1294,7 @@ test "gen.peripheral with count, padding required" {
     var buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
-    try db.toZig(buffer.writer());
+    try db.to_zig(buffer.writer());
     try std.testing.expectEqualStrings(
         \\const micro = @import("microzig");
         \\const mmio = micro.mmio;
@@ -1328,7 +1328,7 @@ test "gen.register with count" {
     var buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
-    try db.toZig(buffer.writer());
+    try db.to_zig(buffer.writer());
     try std.testing.expectEqualStrings(
         \\const micro = @import("microzig");
         \\const mmio = micro.mmio;
@@ -1361,7 +1361,7 @@ test "gen.register with count and fields" {
     var buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
-    try db.toZig(buffer.writer());
+    try db.to_zig(buffer.writer());
     try std.testing.expectEqualStrings(
         \\const micro = @import("microzig");
         \\const mmio = micro.mmio;
@@ -1397,7 +1397,7 @@ test "gen.field with count, width of one, offset, and padding" {
     var buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
-    try db.toZig(buffer.writer());
+    try db.to_zig(buffer.writer());
     try std.testing.expectEqualStrings(
         \\const micro = @import("microzig");
         \\const mmio = micro.mmio;
@@ -1424,7 +1424,7 @@ test "gen.field with count, multi-bit width, offset, and padding" {
     var buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
-    try db.toZig(buffer.writer());
+    try db.to_zig(buffer.writer());
     try std.testing.expectEqualStrings(
         \\const micro = @import("microzig");
         \\const mmio = micro.mmio;
@@ -1451,7 +1451,7 @@ test "gen.interrupts.avr" {
     var buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
-    try db.toZig(buffer.writer());
+    try db.to_zig(buffer.writer());
     try std.testing.expectEqualStrings(
         \\const micro = @import("microzig");
         \\const mmio = micro.mmio;

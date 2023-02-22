@@ -11,14 +11,14 @@ const InterruptWithIndexAndName = @import("InterruptWithIndexAndName.zig");
 
 const log = std.log.scoped(.@"gen.avr");
 
-pub fn writeInterruptVector(
+pub fn write_interrupt_vector(
     db: Database,
     device_id: EntityId,
     writer: anytype,
 ) !void {
-    assert(db.entityIs("instance.device", device_id));
+    assert(db.entity_is("instance.device", device_id));
     const arch = db.instances.devices.get(device_id).?.arch;
-    assert(arch.isAvr());
+    assert(arch.is_avr());
 
     try writer.writeAll(
         \\pub const VectorTable = extern struct {
@@ -50,7 +50,7 @@ pub fn writeInterruptVector(
             InterruptWithIndexAndName,
             interrupts.items,
             {},
-            InterruptWithIndexAndName.lessThan,
+            InterruptWithIndexAndName.less_than,
         );
 
         var index: i32 = 1;

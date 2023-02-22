@@ -102,7 +102,7 @@ fn mainImpl() anyerror!void {
                 const text = try file.reader().readAllAlloc(allocator, std.math.maxInt(usize));
                 defer allocator.free(text);
 
-                break :blk try Database.initFromJson(allocator, text);
+                break :blk try Database.init_from_json(allocator, text);
             }
 
             // all other schema types are xml based
@@ -137,12 +137,12 @@ fn mainImpl() anyerror!void {
 
     var buffered = std.io.bufferedWriter(raw_writer);
     if (res.args.json)
-        try db.jsonStringify(
+        try db.json_stringify(
             .{ .whitespace = .{ .indent = .{ .Space = 2 } } },
             buffered.writer(),
         )
     else
-        try db.toZig(buffered.writer());
+        try db.to_zig(buffered.writer());
 
     try buffered.flush();
 }
@@ -161,8 +161,8 @@ fn readFn(ctx: ?*anyopaque, buffer: ?[*]u8, len: c_int) callconv(.C) c_int {
 fn parseXmlDatabase(allocator: Allocator, doc: xml.Doc, schema: Schema) !Database {
     return switch (schema) {
         .json => unreachable,
-        .atdf => try Database.initFromAtdf(allocator, doc),
-        .svd => try Database.initFromSvd(allocator, doc),
+        .atdf => try Database.init_from_atdf(allocator, doc),
+        .svd => try Database.init_from_svd(allocator, doc),
         .dslite => return error.Todo,
         .xml => return error.Todo,
         //determine_type: {

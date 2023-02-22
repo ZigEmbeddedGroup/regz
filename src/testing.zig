@@ -95,8 +95,8 @@ pub fn expectEqualDatabases(
         const peripheral_id = entry.key_ptr.*;
         const name = expected.attrs.name.get(peripheral_id) orelse unreachable;
         std.log.debug("peripheral: {s}", .{name});
-        const expected_id = try expected.getEntityIdByName("type.peripheral", name);
-        const actual_id = try actual.getEntityIdByName("type.peripheral", name);
+        const expected_id = try expected.get_entity_id_by_name("type.peripheral", name);
+        const actual_id = try actual.get_entity_id_by_name("type.peripheral", name);
 
         try expectEqualEntities(
             .{ .db = expected, .id = expected_id },
@@ -148,8 +148,8 @@ fn expectEqualEntities(
     expected: DatabaseAndId,
     actual: DatabaseAndId,
 ) ErrorEqualEntities!void {
-    const expected_type = expected.db.getEntityType(expected.id).?;
-    const actual_type = actual.db.getEntityType(actual.id).?;
+    const expected_type = expected.db.get_entity_type(expected.id).?;
+    const actual_type = actual.db.get_entity_type(actual.id).?;
     try expectEqual(expected_type, actual_type);
 
     switch (expected_type) {
