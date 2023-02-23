@@ -70,7 +70,7 @@ pub fn write_interrupt_vector(
             }
 
             if (db.attrs.description.get(interrupt.id)) |description|
-                try gen.writeComment(db.gpa, description, writer);
+                try gen.write_comment(db.gpa, description, writer);
 
             try writer.print("{s}: Handler = unhandled,\n", .{
                 std.zig.fmtId(interrupt.name),

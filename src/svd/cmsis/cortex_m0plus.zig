@@ -3,9 +3,9 @@ const Database = @import("../../Database.zig");
 const EntityId = Database.EntityId;
 const cortex_m0 = @import("cortex_m0.zig");
 
-pub const addNvicFields = cortex_m0.addNvicFields;
+pub const add_nvic_fields = cortex_m0.add_nvic_fields;
 
-pub fn addCoreRegisters(db: *Database, device_id: EntityId, scs: EntityId) !void {
+pub fn add_core_registers(db: *Database, device_id: EntityId, scs: EntityId) !void {
     const scb = try db.create_register_group(scs, .{
         .name = "SCB",
         .description = "System Control Block",
@@ -113,13 +113,13 @@ pub fn addCoreRegisters(db: *Database, device_id: EntityId, scs: EntityId) !void
     // SHCSR fields
     _ = try db.create_field(shcsr, .{ .name = "SVCALLPENDED", .offset = 15, .size = 1 });
 
-    try cortex_m0.addNvicCluster(db, device_id, scs);
+    try cortex_m0.add_nvic_cluster(db, device_id, scs);
 
     if (db.instances.devices.get(device_id)) |cpu| if (cpu.properties.get("cpu.mpu") != null)
-        try addMpuRegisters(db, device_id, scs);
+        try add_mpu_registers(db, device_id, scs);
 }
 
-fn addMpuRegisters(db: *Database, device_id: EntityId, scs: EntityId) !void {
+fn add_mpu_registers(db: *Database, device_id: EntityId, scs: EntityId) !void {
     const mpu = try db.create_register_group(scs, .{
         .name = "MPU",
         .description = "Memory Protection Unit",

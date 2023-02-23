@@ -20,7 +20,7 @@ const params = clap.parseParamsComptime(
 );
 
 pub fn main() !void {
-    mainImpl() catch |err| switch (err) {
+    main_impl() catch |err| switch (err) {
         error.Explained => std.process.exit(1),
         else => return err,
     };
@@ -34,7 +34,7 @@ const Schema = enum {
     xml,
 };
 
-fn mainImpl() anyerror!void {
+fn main_impl() anyerror!void {
     defer xml.cleanupParser();
 
     var gpa = std.heap.GeneralPurposeAllocator(.{
@@ -77,10 +77,10 @@ fn mainImpl() anyerror!void {
             }
 
             var stdin = std.io.getStdIn().reader();
-            var doc = try xml.Doc.fromIo(readFn, &stdin);
+            var doc = try xml.Doc.from_io(read_fn, &stdin);
             defer doc.deinit();
 
-            break :blk try parseXmlDatabase(allocator, doc, schema.?);
+            break :blk try parse_xml_database(allocator, doc, schema.?);
         },
         1 => blk: {
             // if schema is null, then try to determine using file extension
@@ -106,10 +106,10 @@ fn mainImpl() anyerror!void {
             }
 
             // all other schema types are xml based
-            var doc = try xml.Doc.fromFile(path);
+            var doc = try xml.Doc.from_file(path);
             defer doc.deinit();
 
-            break :blk try parseXmlDatabase(allocator, doc, schema.?);
+            break :blk try parse_xml_database(allocator, doc, schema.?);
         },
         else => {
             std.log.err("this program takes max one positional argument for now", .{});
@@ -147,7 +147,7 @@ fn mainImpl() anyerror!void {
     try buffered.flush();
 }
 
-fn readFn(ctx: ?*anyopaque, buffer: ?[*]u8, len: c_int) callconv(.C) c_int {
+fn read_fn(ctx: ?*anyopaque, buffer: ?[*]u8, len: c_int) callconv(.C) c_int {
     if (buffer == null)
         return -1;
 
@@ -158,7 +158,7 @@ fn readFn(ctx: ?*anyopaque, buffer: ?[*]u8, len: c_int) callconv(.C) c_int {
     } else -1;
 }
 
-fn parseXmlDatabase(allocator: Allocator, doc: xml.Doc, schema: Schema) !Database {
+fn parse_xml_database(allocator: Allocator, doc: xml.Doc, schema: Schema) !Database {
     return switch (schema) {
         .json => unreachable,
         .atdf => try Database.init_from_atdf(allocator, doc),

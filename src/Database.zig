@@ -277,7 +277,7 @@ pub fn init_from_svd(allocator: Allocator, doc: xml.Doc) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 
-    try svd.loadIntoDb(&db, doc);
+    try svd.load_into_db(&db, doc);
     return db;
 }
 
@@ -285,7 +285,7 @@ pub fn init_from_dslite(allocator: Allocator, doc: xml.Doc) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 
-    try dslite.loadIntoDb(&db, doc);
+    try dslite.load_into_db(&db, doc);
     return db;
 }
 
@@ -293,7 +293,7 @@ pub fn init_from_json(allocator: Allocator, text: []const u8) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 
-    try regzon.loadIntoDb(&db, text);
+    try regzon.load_into_db(&db, text);
     return db;
 }
 
@@ -887,7 +887,7 @@ pub fn json_stringify(
     opts: std.json.StringifyOptions,
     writer: anytype,
 ) !void {
-    var value_tree = try regzon.toJson(db);
+    var value_tree = try regzon.to_json(db);
     defer value_tree.deinit();
 
     try value_tree.root.jsonStringify(opts, writer);
@@ -906,7 +906,7 @@ pub fn format(
 }
 
 pub fn to_zig(db: Database, out_writer: anytype) !void {
-    try gen.toZig(db, out_writer);
+    try gen.to_zig(db, out_writer);
 }
 
 test "all" {

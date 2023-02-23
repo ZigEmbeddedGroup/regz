@@ -5,7 +5,7 @@ const Allocator = std.mem.Allocator;
 const Database = @import("Database.zig");
 const EntitySet = Database.EntitySet;
 
-pub fn peripheralTypeWithRegisterAndField(allocator: Allocator) !Database {
+pub fn peripheral_type_with_register_and_field(allocator: Allocator) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 
@@ -31,7 +31,7 @@ pub fn peripheralTypeWithRegisterAndField(allocator: Allocator) !Database {
     return db;
 }
 
-pub fn peripheralInstantiation(allocator: Allocator) !Database {
+pub fn peripheral_instantiation(allocator: Allocator) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 
@@ -63,7 +63,7 @@ pub fn peripheralInstantiation(allocator: Allocator) !Database {
     return db;
 }
 
-pub fn peripheralsWithSharedType(allocator: Allocator) !Database {
+pub fn peripherals_with_shared_type(allocator: Allocator) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 
@@ -93,7 +93,7 @@ pub fn peripheralsWithSharedType(allocator: Allocator) !Database {
     return db;
 }
 
-pub fn peripheralWithModes(allocator: Allocator) !Database {
+pub fn peripheral_with_modes(allocator: Allocator) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 
@@ -145,7 +145,7 @@ pub fn peripheralWithModes(allocator: Allocator) !Database {
     return db;
 }
 
-pub fn peripheralWithEnum(allocator: Allocator) !Database {
+pub fn peripheral_with_enum(allocator: Allocator) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 
@@ -170,7 +170,7 @@ pub fn peripheralWithEnum(allocator: Allocator) !Database {
     return db;
 }
 
-pub fn peripheralWithEnumEnumIsExhaustedOfValues(allocator: Allocator) !Database {
+pub fn peripheral_with_enum_and_its_exhausted_of_values(allocator: Allocator) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 
@@ -195,7 +195,7 @@ pub fn peripheralWithEnumEnumIsExhaustedOfValues(allocator: Allocator) !Database
     return db;
 }
 
-pub fn fieldWithNamedEnum(allocator: Allocator) !Database {
+pub fn field_with_named_enum(allocator: Allocator) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 
@@ -227,7 +227,7 @@ pub fn fieldWithNamedEnum(allocator: Allocator) !Database {
     return db;
 }
 
-pub fn fieldWithAnonymousEnum(allocator: Allocator) !Database {
+pub fn field_with_anonymous_enum(allocator: Allocator) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 
@@ -258,7 +258,7 @@ pub fn fieldWithAnonymousEnum(allocator: Allocator) !Database {
     return db;
 }
 
-pub fn namespacedRegisterGroups(allocator: Allocator) !Database {
+pub fn namespaced_register_groups(allocator: Allocator) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 
@@ -289,7 +289,7 @@ pub fn namespacedRegisterGroups(allocator: Allocator) !Database {
     return db;
 }
 
-pub fn peripheralWithReservedRegister(allocator: Allocator) !Database {
+pub fn peripheral_with_reserved_register(allocator: Allocator) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 
@@ -312,7 +312,7 @@ pub fn peripheralWithReservedRegister(allocator: Allocator) !Database {
     return db;
 }
 
-pub fn peripheralWithCount(allocator: Allocator) !Database {
+pub fn peripheral_with_count(allocator: Allocator) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 
@@ -336,7 +336,7 @@ pub fn peripheralWithCount(allocator: Allocator) !Database {
     return db;
 }
 
-pub fn peripheralWithCountPaddingRequired(allocator: Allocator) !Database {
+pub fn peripheral_with_count_padding_required(allocator: Allocator) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 
@@ -360,7 +360,7 @@ pub fn peripheralWithCountPaddingRequired(allocator: Allocator) !Database {
     return db;
 }
 
-pub fn registerWithCount(allocator: Allocator) !Database {
+pub fn register_with_count(allocator: Allocator) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 
@@ -382,7 +382,7 @@ pub fn registerWithCount(allocator: Allocator) !Database {
     return db;
 }
 
-pub fn registerWithCountAndFields(allocator: Allocator) !Database {
+pub fn register_with_count_and_fields(allocator: Allocator) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 
@@ -416,7 +416,7 @@ pub fn registerWithCountAndFields(allocator: Allocator) !Database {
     return db;
 }
 
-pub fn fieldWithCountWidthOfOneOffsetAndPadding(allocator: Allocator) !Database {
+pub fn field_with_count_width_of_one_offset_and_padding(allocator: Allocator) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 
@@ -440,7 +440,7 @@ pub fn fieldWithCountWidthOfOneOffsetAndPadding(allocator: Allocator) !Database 
     return db;
 }
 
-pub fn fieldWithCountMultiBitWidthOffsetAndPadding(allocator: Allocator) !Database {
+pub fn field_with_count_multi_bit_width_offset_and_padding(allocator: Allocator) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 
@@ -464,7 +464,7 @@ pub fn fieldWithCountMultiBitWidthOffsetAndPadding(allocator: Allocator) !Databa
     return db;
 }
 
-pub fn interruptsAvr(allocator: Allocator) !Database {
+pub fn interrupts_avr(allocator: Allocator) !Database {
     var db = try Database.init(allocator);
     errdefer db.deinit();
 

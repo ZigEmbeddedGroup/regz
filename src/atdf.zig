@@ -38,7 +38,7 @@ pub fn load_into_db(db: *Database, doc: xml.Doc) !void {
     var ctx = Context{ .db = db };
     defer ctx.deinit();
 
-    const root = try doc.getRootElement();
+    const root = try doc.get_root_element();
     var module_it = root.iterate(&.{"modules"}, "module");
     while (module_it.next()) |entry|
         try load_module_type(&ctx, entry);
@@ -58,10 +58,10 @@ fn load_device(ctx: *Context, node: xml.Node) !void {
         "series",
     });
 
-    const name = node.getAttribute("name") orelse return error.NoDeviceName;
-    const arch_str = node.getAttribute("architecture") orelse return error.NoDeviceArch;
+    const name = node.get_attribute("name") orelse return error.NoDeviceName;
+    const arch_str = node.get_attribute("architecture") orelse return error.NoDeviceArch;
     const arch = arch_from_str(arch_str);
-    const family = node.getAttribute("family") orelse return error.NoDeviceFamily;
+    const family = node.get_attribute("family") orelse return error.NoDeviceFamily;
 
     const db = ctx.db;
     const id = try db.create_device(.{
@@ -72,7 +72,7 @@ fn load_device(ctx: *Context, node: xml.Node) !void {
 
     try db.add_device_property(id, "arch", arch_str);
     try db.add_device_property(id, "family", family);
-    if (node.getAttribute("series")) |series|
+    if (node.get_attribute("series")) |series|
         try db.add_device_property(id, "series", series);
 
     var module_it = node.iterate(&.{"peripherals"}, "module");
@@ -81,7 +81,7 @@ fn load_device(ctx: *Context, node: xml.Node) !void {
             log.warn("failed to instantiate module: {}", .{err});
         };
 
-    if (node.findChild("interrupts")) |interrupts_node|
+    if (node.find_child("interrupts")) |interrupts_node|
         try load_interrupts(ctx, interrupts_node, id);
 
     try infer_peripheral_offsets(ctx);
@@ -115,9 +115,9 @@ fn load_interrupts(ctx: *Context, node: xml.Node, device_id: EntityId) !void {
 
 fn load_interrupt_group(ctx: *Context, node: xml.Node, device_id: EntityId) !void {
     const db = ctx.db;
-    const module_instance = node.getAttribute("module-instance") orelse return error.MissingModuleInstance;
-    const name_in_module = node.getAttribute("name-in-module") orelse return error.MissingNameInModule;
-    const index_str = node.getAttribute("index") orelse return error.MissingInterruptGroupIndex;
+    const module_instance = node.get_attribute("module-instance") orelse return error.MissingModuleInstance;
+    const name_in_module = node.get_attribute("name-in-module") orelse return error.MissingNameInModule;
+    const index_str = node.get_attribute("index") orelse return error.MissingInterruptGroupIndex;
     const index = try std.fmt.parseInt(i32, index_str, 0);
 
     if (ctx.interrupt_groups.get(name_in_module)) |group_list| {
@@ -303,7 +303,7 @@ fn infer_enum_size(db: *Database, enum_id: EntityId) !void {
 fn get_inlined_register_group(parent_node: xml.Node, parent_name: []const u8) ?xml.Node {
     var register_group_it = parent_node.iterate(&.{}, "register-group");
     const rg_node = register_group_it.next() orelse return null;
-    const rg_name = rg_node.getAttribute("name") orelse return null;
+    const rg_name = rg_node.get_attribute("name") orelse return null;
     log.debug("rg name is {s}, parent is {s}", .{ rg_name, parent_name });
     if (register_group_it.next() != null) {
         log.debug("register group not alone", .{});
@@ -333,10 +333,10 @@ fn load_module_type(ctx: *Context, node: xml.Node) !void {
 
     log.debug("{}: creating peripheral type", .{id});
     try db.types.peripherals.put(db.gpa, id, {});
-    const name = node.getAttribute("name") orelse return error.ModuleTypeMissingName;
+    const name = node.get_attribute("name") orelse return error.ModuleTypeMissingName;
     try db.add_name(id, name);
 
-    if (node.getAttribute("caption")) |caption|
+    if (node.get_attribute("caption")) |caption|
         try db.add_description(id, caption);
 
     var value_group_it = node.iterate(&.{}, "value-group");
@@ -361,7 +361,7 @@ fn load_module_type(ctx: *Context, node: xml.Node) !void {
 }
 
 fn load_module_interrupt_group(ctx: *Context, node: xml.Node) !void {
-    const name = node.getAttribute("name") orelse return error.MissingInterruptGroupName;
+    const name = node.get_attribute("name") orelse return error.MissingInterruptGroupName;
     try ctx.interrupt_groups.put(ctx.db.gpa, name, .{});
 
     var interrupt_it = node.iterate(&.{}, "interrupt");
@@ -378,12 +378,12 @@ fn load_module_interrupt_group_entry(
     const list = ctx.interrupt_groups.getEntry(group_name).?.value_ptr;
 
     try list.append(ctx.db.gpa, .{
-        .name = node.getAttribute("name") orelse return error.MissingInterruptName,
-        .index = if (node.getAttribute("index")) |index_str|
+        .name = node.get_attribute("name") orelse return error.MissingInterruptName,
+        .index = if (node.get_attribute("index")) |index_str|
             try std.fmt.parseInt(i32, index_str, 0)
         else
             return error.MissingInterruptIndex,
-        .description = node.getAttribute("caption"),
+        .description = node.get_attribute("caption"),
     });
 }
 
@@ -446,13 +446,13 @@ fn load_register_group(
 
     log.debug("{}: creating register group", .{id});
     try db.types.register_groups.put(db.gpa, id, {});
-    if (node.getAttribute("name")) |name|
+    if (node.get_attribute("name")) |name|
         try db.add_name(id, name);
 
-    if (node.getAttribute("caption")) |caption|
+    if (node.get_attribute("caption")) |caption|
         try db.add_description(id, caption);
 
-    if (node.getAttribute("size")) |size|
+    if (node.get_attribute("size")) |size|
         try db.add_size(id, try std.fmt.parseInt(u64, size, 0));
 
     try load_register_group_children(ctx, node, id);
@@ -477,10 +477,10 @@ fn load_mode(ctx: *Context, node: xml.Node, parent_id: EntityId) !void {
     });
 
     const id = try db.create_mode(parent_id, .{
-        .name = node.getAttribute("name") orelse return error.MissingModeName,
-        .description = node.getAttribute("caption"),
-        .value = node.getAttribute("value") orelse return error.MissingModeValue,
-        .qualifier = node.getAttribute("qualifier") orelse return error.MissingModeQualifier,
+        .name = node.get_attribute("name") orelse return error.MissingModeName,
+        .description = node.get_attribute("caption"),
+        .value = node.get_attribute("value") orelse return error.MissingModeValue,
+        .qualifier = node.get_attribute("qualifier") orelse return error.MissingModeQualifier,
     });
     errdefer db.destroy_entity(id);
 
@@ -567,24 +567,24 @@ fn load_register(
         "offset",
     });
 
-    const name = node.getAttribute("name") orelse return error.MissingRegisterName;
+    const name = node.get_attribute("name") orelse return error.MissingRegisterName;
 
     const id = try db.create_register(parent_id, .{
         .name = name,
-        .description = node.getAttribute("caption"),
+        .description = node.get_attribute("caption"),
         //  size is in bytes, convert to bits
-        .size = if (node.getAttribute("size")) |size_str|
+        .size = if (node.get_attribute("size")) |size_str|
             @as(u64, 8) * try std.fmt.parseInt(u64, size_str, 0)
         else
             return error.MissingRegisterSize,
-        .offset = if (node.getAttribute("offset")) |offset_str|
+        .offset = if (node.get_attribute("offset")) |offset_str|
             try std.fmt.parseInt(u64, offset_str, 0)
         else
             return error.MissingRegisterOffset,
     });
     errdefer db.destroy_entity(id);
 
-    if (node.getAttribute("modes")) |modes|
+    if (node.get_attribute("modes")) |modes|
         assign_modes_to_entity(ctx, id, parent_id, modes) catch {
             log.warn("failed to find mode '{s}' for register '{s}'", .{
                 modes,
@@ -592,12 +592,12 @@ fn load_register(
             });
         };
 
-    if (node.getAttribute("initval")) |initval_str| {
+    if (node.get_attribute("initval")) |initval_str| {
         const initval = try std.fmt.parseInt(u64, initval_str, 0);
         try db.add_reset_value(id, initval);
     }
 
-    if (node.getAttribute("rw")) |access_str| blk: {
+    if (node.get_attribute("rw")) |access_str| blk: {
         const access = access_from_string(access_str) catch break :blk;
         switch (access) {
             .read_only, .write_only => try db.attrs.access.put(
@@ -635,8 +635,8 @@ fn load_field(ctx: *Context, node: xml.Node, register_id: EntityId) !void {
         "values",
     });
 
-    const name = node.getAttribute("name") orelse return error.MissingFieldName;
-    const mask_str = node.getAttribute("mask") orelse return error.MissingFieldMask;
+    const name = node.get_attribute("name") orelse return error.MissingFieldName;
+    const mask_str = node.get_attribute("mask") orelse return error.MissingFieldMask;
     const mask = std.fmt.parseInt(u64, mask_str, 0) catch |err| {
         log.warn("failed to parse mask '{s}' of bitfield '{s}'", .{
             mask_str,
@@ -664,13 +664,13 @@ fn load_field(ctx: *Context, node: xml.Node, register_id: EntityId) !void {
 
                 const id = try db.create_field(register_id, .{
                     .name = field_name,
-                    .description = node.getAttribute("caption"),
+                    .description = node.get_attribute("caption"),
                     .size = 1,
                     .offset = i,
                 });
                 errdefer db.destroy_entity(id);
 
-                if (node.getAttribute("modes")) |modes|
+                if (node.get_attribute("modes")) |modes|
                     assign_modes_to_entity(ctx, id, register_id, modes) catch {
                         log.warn("failed to find mode '{s}' for field '{s}'", .{
                             modes,
@@ -678,7 +678,7 @@ fn load_field(ctx: *Context, node: xml.Node, register_id: EntityId) !void {
                         });
                     };
 
-                if (node.getAttribute("rw")) |access_str| blk: {
+                if (node.get_attribute("rw")) |access_str| blk: {
                     const access = access_from_string(access_str) catch break :blk;
                     switch (access) {
                         .read_only, .write_only => try db.attrs.access.put(
@@ -698,14 +698,14 @@ fn load_field(ctx: *Context, node: xml.Node, register_id: EntityId) !void {
 
         const id = try db.create_field(register_id, .{
             .name = name,
-            .description = node.getAttribute("caption"),
+            .description = node.get_attribute("caption"),
             .size = width,
             .offset = offset,
         });
         errdefer db.destroy_entity(id);
 
         // TODO: modes are space delimited, and multiple can apply to a single bitfield or register
-        if (node.getAttribute("modes")) |modes|
+        if (node.get_attribute("modes")) |modes|
             assign_modes_to_entity(ctx, id, register_id, modes) catch {
                 log.warn("failed to find mode '{s}' for field '{s}'", .{
                     modes,
@@ -713,7 +713,7 @@ fn load_field(ctx: *Context, node: xml.Node, register_id: EntityId) !void {
                 });
             };
 
-        if (node.getAttribute("rw")) |access_str| blk: {
+        if (node.get_attribute("rw")) |access_str| blk: {
             const access = access_from_string(access_str) catch break :blk;
             switch (access) {
                 .read_only, .write_only => try db.attrs.access.put(
@@ -727,7 +727,7 @@ fn load_field(ctx: *Context, node: xml.Node, register_id: EntityId) !void {
 
         // values _should_ match to a known enum
         // TODO: namespace the enum to the appropriate register, register_group, or peripheral
-        if (node.getAttribute("values")) |values| {
+        if (node.get_attribute("values")) |values| {
             var it = db.types.enums.iterator();
             while (it.next()) |entry| {
                 const enum_id = entry.key_ptr.*;
@@ -770,10 +770,10 @@ fn load_enum(
     errdefer db.destroy_entity(id);
 
     log.debug("{}: creating enum", .{id});
-    const name = node.getAttribute("name") orelse return error.MissingEnumName;
+    const name = node.get_attribute("name") orelse return error.MissingEnumName;
     try db.types.enums.put(db.gpa, id, {});
     try db.add_name(id, name);
-    if (node.getAttribute("caption")) |caption|
+    if (node.get_attribute("caption")) |caption|
         try db.add_description(id, caption);
 
     var value_it = node.iterate(&.{}, "value");
@@ -797,8 +797,8 @@ fn load_enum_field(
         "value",
     });
 
-    const name = node.getAttribute("name") orelse return error.MissingEnumFieldName;
-    const value_str = node.getAttribute("value") orelse {
+    const name = node.get_attribute("name") orelse return error.MissingEnumFieldName;
+    const value_str = node.get_attribute("value") orelse {
         log.warn("enum missing value: {s}", .{name});
         return error.MissingEnumFieldValue;
     };
@@ -817,7 +817,7 @@ fn load_enum_field(
     log.debug("{}: creating enum field with value: {}", .{ id, value });
     try db.add_name(id, name);
     try db.types.enum_fields.put(db.gpa, id, value);
-    if (node.getAttribute("caption")) |caption|
+    if (node.get_attribute("caption")) |caption|
         try db.add_description(id, caption);
 
     try db.add_child("type.enum_field", enum_id, id);
@@ -830,7 +830,7 @@ fn load_module_instances(
     device_id: EntityId,
 ) !void {
     const db = ctx.db;
-    const module_name = node.getAttribute("name") orelse return error.MissingModuleName;
+    const module_name = node.get_attribute("name") orelse return error.MissingModuleName;
     const type_id = blk: {
         var periph_it = db.types.peripherals.iterator();
         while (periph_it.next()) |entry| {
@@ -890,15 +890,15 @@ fn load_module_instance_from_peripheral(
     errdefer db.destroy_entity(id);
 
     log.debug("{}: creating module instance", .{id});
-    const name = node.getAttribute("name") orelse return error.MissingInstanceName;
+    const name = node.get_attribute("name") orelse return error.MissingInstanceName;
     try db.instances.peripherals.put(db.gpa, id, peripheral_type_id);
     try db.add_name(id, name);
-    if (node.getAttribute("caption")) |description|
+    if (node.get_attribute("caption")) |description|
         try db.add_description(id, description);
 
     if (get_inlined_register_group(node, name)) |register_group_node| {
         log.debug("{}: inlining", .{id});
-        const offset_str = register_group_node.getAttribute("offset") orelse return error.MissingPeripheralOffset;
+        const offset_str = register_group_node.get_attribute("offset") orelse return error.MissingPeripheralOffset;
         const offset = try std.fmt.parseInt(u64, offset_str, 0);
         try db.add_offset(id, offset);
     } else {
@@ -935,8 +935,8 @@ fn load_module_instance_from_register_group(
         break :blk ret;
     };
 
-    const name = node.getAttribute("name") orelse return error.MissingInstanceName;
-    const name_in_module = register_group_node.getAttribute("name-in-module") orelse return error.MissingNameInModule;
+    const name = node.get_attribute("name") orelse return error.MissingInstanceName;
+    const name_in_module = register_group_node.get_attribute("name-in-module") orelse return error.MissingNameInModule;
     const register_group_id = blk: {
         const register_group_set = db.children.register_groups.get(peripheral_type_id) orelse return error.MissingRegisterGroup;
         var it = register_group_set.iterator();
@@ -951,14 +951,14 @@ fn load_module_instance_from_register_group(
     const id = db.create_entity();
     errdefer db.destroy_entity(id);
 
-    const offset_str = register_group_node.getAttribute("offset") orelse return error.MissingOffset;
+    const offset_str = register_group_node.get_attribute("offset") orelse return error.MissingOffset;
     const offset = try std.fmt.parseInt(u64, offset_str, 0);
 
     try db.instances.peripherals.put(db.gpa, id, register_group_id);
     try db.add_name(id, name);
     try db.add_offset(id, offset);
 
-    if (node.getAttribute("caption")) |description|
+    if (node.get_attribute("caption")) |description|
         try db.add_description(id, description);
 
     try db.add_child("instance.peripheral", device_id, id);
@@ -988,9 +988,9 @@ fn load_register_group_instance(
     errdefer db.destroy_entity(id);
 
     log.debug("{}: creating register group instance", .{id});
-    const name = node.getAttribute("name") orelse return error.MissingInstanceName;
+    const name = node.get_attribute("name") orelse return error.MissingInstanceName;
     // TODO: this isn't always a set value, not sure what to do if it's left out
-    const name_in_module = node.getAttribute("name-in-module") orelse {
+    const name_in_module = node.get_attribute("name-in-module") orelse {
         log.warn("no 'name-in-module' for register group '{s}'", .{
             name,
         });
@@ -1011,16 +1011,16 @@ fn load_register_group_instance(
 
     try db.instances.register_groups.put(db.gpa, id, type_id);
     try db.add_name(id, name);
-    if (node.getAttribute("caption")) |caption|
+    if (node.get_attribute("caption")) |caption|
         try db.add_description(id, caption);
 
     // size is in bytes
-    if (node.getAttribute("size")) |size_str| {
+    if (node.get_attribute("size")) |size_str| {
         const size = try std.fmt.parseInt(u64, size_str, 0);
         try db.add_size(id, size);
     }
 
-    if (node.getAttribute("offset")) |offset_str| {
+    if (node.get_attribute("offset")) |offset_str| {
         const offset = try std.fmt.parseInt(u64, offset_str, 0);
         try db.add_offset(id, offset);
     }
@@ -1065,8 +1065,8 @@ fn load_interrupt(ctx: *Context, node: xml.Node, device_id: EntityId) !void {
         "alternate-caption",
     });
 
-    const name = node.getAttribute("name") orelse return error.MissingInterruptName;
-    const index_str = node.getAttribute("index") orelse return error.MissingInterruptIndex;
+    const name = node.get_attribute("name") orelse return error.MissingInterruptName;
+    const index_str = node.get_attribute("index") orelse return error.MissingInterruptIndex;
     const index = std.fmt.parseInt(i32, index_str, 0) catch |err| {
         log.warn("failed to parse value '{s}' of interrupt '{s}'", .{
             index_str,
@@ -1075,7 +1075,7 @@ fn load_interrupt(ctx: *Context, node: xml.Node, device_id: EntityId) !void {
         return err;
     };
 
-    const full_name = if (node.getAttribute("module-instance")) |module_instance|
+    const full_name = if (node.get_attribute("module-instance")) |module_instance|
         try std.mem.join(db.arena.allocator(), "_", &.{ module_instance, name })
     else
         name;
@@ -1083,14 +1083,14 @@ fn load_interrupt(ctx: *Context, node: xml.Node, device_id: EntityId) !void {
     _ = try db.create_interrupt(device_id, .{
         .name = full_name,
         .index = index,
-        .description = node.getAttribute("caption"),
+        .description = node.get_attribute("caption"),
     });
 }
 
 // for now just emit warning logs when the input has attributes that it shouldn't have
 // TODO: better output
 fn validate_attrs(node: xml.Node, attrs: []const []const u8) void {
-    var it = node.iterateAttrs();
+    var it = node.iterate_attrs();
     while (it.next()) |attr| {
         for (attrs) |expected_attr| {
             if (std.mem.eql(u8, attr.key, expected_attr))
@@ -1108,7 +1108,7 @@ const expectEqual = std.testing.expectEqual;
 const expectEqualStrings = std.testing.expectEqualStrings;
 
 const testing = @import("testing.zig");
-const expectAttr = testing.expectAttr;
+const expectAttr = testing.expect_attr;
 
 test "atdf.register with bitfields and enum" {
     const text =
@@ -1149,7 +1149,7 @@ test "atdf.register with bitfields and enum" {
         \\  </modules>
         \\</avr-tools-device-file>
     ;
-    var doc = try xml.Doc.fromMemory(text);
+    var doc = try xml.Doc.from_memory(text);
     var db = try Database.init_from_atdf(std.testing.allocator, doc);
     defer db.deinit();
 
@@ -1275,7 +1275,7 @@ test "atdf.register with mode" {
         \\
     ;
 
-    var doc = try xml.Doc.fromMemory(text);
+    var doc = try xml.Doc.from_memory(text);
     var db = try Database.init_from_atdf(std.testing.allocator, doc);
     defer db.deinit();
 
@@ -1398,7 +1398,7 @@ test "atdf.instance of register group" {
         \\
     ;
 
-    var doc = try xml.Doc.fromMemory(text);
+    var doc = try xml.Doc.from_memory(text);
     var db = try Database.init_from_atdf(std.testing.allocator, doc);
     defer db.deinit();
 
@@ -1437,7 +1437,7 @@ test "atdf.interrupts" {
         \\
     ;
 
-    var doc = try xml.Doc.fromMemory(text);
+    var doc = try xml.Doc.from_memory(text);
     var db = try Database.init_from_atdf(std.testing.allocator, doc);
     defer db.deinit();
 
@@ -1463,7 +1463,7 @@ test "atdf.interrupts with module-instance" {
         \\
     ;
 
-    var doc = try xml.Doc.fromMemory(text);
+    var doc = try xml.Doc.from_memory(text);
     var db = try Database.init_from_atdf(std.testing.allocator, doc);
     defer db.deinit();
 
@@ -1496,7 +1496,7 @@ test "atdf.interrupts with interrupt-groups" {
         \\
     ;
 
-    var doc = try xml.Doc.fromMemory(text);
+    var doc = try xml.Doc.from_memory(text);
     var db = try Database.init_from_atdf(std.testing.allocator, doc);
     defer db.deinit();
 

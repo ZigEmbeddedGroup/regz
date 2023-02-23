@@ -3,11 +3,11 @@ const Database = @import("../../Database.zig");
 const EntityId = Database.EntityId;
 const cortex_m0 = @import("cortex_m0.zig");
 
-pub const addNvicFields = cortex_m0.addNvicFields;
+pub const add_nvic_fields = cortex_m0.add_nvic_fields;
 
-pub fn addCoreRegisters(db: *Database, device_id: EntityId, scs_id: EntityId) !void {
-    try cortex_m0.addNvicCluster(db, device_id, scs_id);
-    try cortex_m0.addScbCluster(db, device_id, scs_id);
+pub fn add_core_registers(db: *Database, device_id: EntityId, scs_id: EntityId) !void {
+    try cortex_m0.add_nvic_cluster(db, device_id, scs_id);
+    try cortex_m0.add_scb_cluster(db, device_id, scs_id);
 
     const scnscb = try db.create_register_group(scs_id, .{
         .name = "SCnSCN",

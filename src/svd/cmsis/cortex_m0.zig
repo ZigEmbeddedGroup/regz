@@ -4,12 +4,12 @@ const EntityId = Database.EntityId;
 
 const parseInt = std.fmt.parseInt;
 
-pub fn addCoreRegisters(db: *Database, device_id: EntityId, scs_id: EntityId) !void {
-    try addNvicCluster(db, device_id, scs_id);
-    try addScbCluster(db, device_id, scs_id);
+pub fn add_core_registers(db: *Database, device_id: EntityId, scs_id: EntityId) !void {
+    try add_nvic_cluster(db, device_id, scs_id);
+    try add_scb_cluster(db, device_id, scs_id);
 }
 
-pub fn addNvicCluster(db: *Database, device_id: EntityId, scs_id: EntityId) !void {
+pub fn add_nvic_cluster(db: *Database, device_id: EntityId, scs_id: EntityId) !void {
     const nvic = try db.create_register_group(scs_id, .{
         .name = "NVIC",
         .description = "Nested Vectored Interrupt Controller",
@@ -64,7 +64,7 @@ pub fn addNvicCluster(db: *Database, device_id: EntityId, scs_id: EntityId) !voi
         };
 }
 
-pub fn addNvicFields(db: *Database, device_id: EntityId) !void {
+pub fn add_nvic_fields(db: *Database, device_id: EntityId) !void {
     const interrupt_registers: [4]EntityId = .{
         try db.get_entity_id_by_name("type.register", "ISER"),
         try db.get_entity_id_by_name("type.register", "ICER"),
@@ -104,7 +104,7 @@ pub fn addNvicFields(db: *Database, device_id: EntityId) !void {
     }
 }
 
-pub fn addScbCluster(db: *Database, device_id: EntityId, scs_id: EntityId) !void {
+pub fn add_scb_cluster(db: *Database, device_id: EntityId, scs_id: EntityId) !void {
     const scb = try db.create_register_group(scs_id, .{
         .name = "SCB",
         .description = "System Control Block",

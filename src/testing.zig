@@ -26,7 +26,7 @@ fn Attr(comptime attr_name: []const u8) type {
     );
 }
 
-pub fn expectAttr(
+pub fn expect_attr(
     db: Database,
     comptime attr_name: []const u8,
     expected: Attr(attr_name),
@@ -44,7 +44,7 @@ const DatabaseAndId = struct {
     id: EntityId,
 };
 
-fn expectEqualAttr(
+fn expect_equal_attr(
     comptime attr_name: []const u8,
     expected: DatabaseAndId,
     actual: DatabaseAndId,
@@ -66,27 +66,27 @@ fn expectEqualAttr(
     }
 }
 
-fn expectEqualAttrs(
+fn expect_equal_attrs(
     expected: DatabaseAndId,
     actual: DatabaseAndId,
 ) !void {
     // skip name since that's usually been compared
 
-    try expectEqualAttr("description", expected, actual);
-    try expectEqualAttr("offset", expected, actual);
-    try expectEqualAttr("access", expected, actual);
-    try expectEqualAttr("count", expected, actual);
-    try expectEqualAttr("size", expected, actual);
-    try expectEqualAttr("reset_value", expected, actual);
-    try expectEqualAttr("reset_mask", expected, actual);
-    try expectEqualAttr("version", expected, actual);
+    try expect_equal_attr("description", expected, actual);
+    try expect_equal_attr("offset", expected, actual);
+    try expect_equal_attr("access", expected, actual);
+    try expect_equal_attr("count", expected, actual);
+    try expect_equal_attr("size", expected, actual);
+    try expect_equal_attr("reset_value", expected, actual);
+    try expect_equal_attr("reset_mask", expected, actual);
+    try expect_equal_attr("version", expected, actual);
 
     // TODO:
     //  - modes
     //  - enum
 }
 
-pub fn expectEqualDatabases(
+pub fn expect_equal_databases(
     expected: Database,
     actual: Database,
 ) !void {
@@ -98,7 +98,7 @@ pub fn expectEqualDatabases(
         const expected_id = try expected.get_entity_id_by_name("type.peripheral", name);
         const actual_id = try actual.get_entity_id_by_name("type.peripheral", name);
 
-        try expectEqualEntities(
+        try expect_equal_entities(
             .{ .db = expected, .id = expected_id },
             .{ .db = actual, .id = actual_id },
         );
@@ -144,7 +144,7 @@ const ErrorEqualEntities = error{
     TestUnexpectedResult,
 };
 
-fn expectEqualEntities(
+fn expect_equal_entities(
     expected: DatabaseAndId,
     actual: DatabaseAndId,
 ) ErrorEqualEntities!void {
@@ -172,7 +172,7 @@ fn expectEqualEntities(
         .peripheral_instance => {
             const expected_id = expected.db.instances.peripherals.get(expected.id).?;
             const actual_id = actual.db.instances.peripherals.get(actual.id).?;
-            try expectEqualEntities(
+            try expect_equal_entities(
                 .{ .db = expected.db, .id = expected_id },
                 .{ .db = actual.db, .id = actual_id },
             );
@@ -203,11 +203,11 @@ fn expectEqualEntities(
         else => {},
     }
 
-    try expectEqualAttrs(expected, actual);
-    try expectEqualChildren(expected, actual);
+    try expect_equal_attrs(expected, actual);
+    try expect_equal_children(expected, actual);
 }
 
-fn expectEqualChildren(
+fn expect_equal_children(
     expected: DatabaseAndId,
     actual: DatabaseAndId,
 ) ErrorEqualEntities!void {
@@ -227,7 +227,7 @@ fn expectEqualChildren(
                         break child_id;
                 } else return error.NameNotFound;
 
-                try expectEqualEntities(
+                try expect_equal_entities(
                     .{ .db = expected.db, .id = expected_child_id },
                     .{ .db = actual.db, .id = actual_child_id },
                 );
