@@ -154,7 +154,10 @@ pub fn load_into_db(db: *Database, doc: xml.Doc) !void {
     }
 
     const device = db.instances.devices.getEntry(device_id).?.value_ptr;
-    device.arch = arch_from_str(device.properties.get("cpu.name").?);
+    device.arch = if (device.properties.get("cpu.name")) |cpu_name|
+        arch_from_str(cpu_name)
+    else
+        .unknown;
     if (device.arch.is_arm())
         try arm.load_system_interrupts(db, device_id);
 
