@@ -162,4 +162,28 @@ pub fn build(b: *std.build.Builder) !void {
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&tests.step);
+
+    const crosscompile_step = b.step("crosscompile", "Build all supported arches");
+    const supported_arches: []const []const u8 = &.{
+        "aarch64-linux-gnu",
+        "aarch64-linux-musl",
+        "aarch64-macos",
+        "x86-linux-gnu",
+        "x86-linux-musl",
+        "x86-windows",
+        "x86_64-linux-gnu",
+        "x86_64-linux-musl",
+        "x86_64-macos",
+        "x86_64-windows-gnu",
+    };
+
+    for (supported_arches) |supported_arch_str| {
+        const crosscompiled_regz = Regz.create(b, .{
+            .target = try std.zig.CrossTarget.parse(.{
+                .arch_os_abi = supported_arch_str,
+            }),
+            .optimize = optimize,
+        });
+        crosscompile_step.dependOn(&crosscompiled_regz.exe.step);
+    }
 }
