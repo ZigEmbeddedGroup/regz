@@ -53,6 +53,7 @@ pub const Node = struct {
                             .value = std.mem.span(content),
                         };
                     };
+                break :ret null;
             } else null;
         }
     };

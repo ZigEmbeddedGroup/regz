@@ -1,10 +1,11 @@
 .{
     .name = "regz",
     .version = "0.0.0",
+    .paths = .{""},
     .dependencies = .{
         .libxml2 = .{
-            .url = "https://github.com/mitchellh/zig-build-libxml2/archive/4e80a167d6e13e09e0da77457310401084e758cc.tar.gz",
-            .hash = "1220000fd2a0f192b1aab0c12be0080748e774044399d69a852ffa38a58f2b1dcc09",
+            .url = "https://github.com/mitchellh/zig-build-libxml2/archive/04a586d5dbfe3339c1555be6ee369e87a39a626e.tar.gz",
+            .hash = "1220d6b194340235f6d05c6780cb96935678edebabba1a75887b05e4176c0bd3f131",
         },
         .clap = .{
             .url = "https://github.com/Hejsil/zig-clap/archive/f49b94700e0761b7514abdca0e4f0e7f3f938a93.tar.gz",
