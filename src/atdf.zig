@@ -565,6 +565,10 @@ fn load_register(
             try std.fmt.parseInt(u64, offset_str, 0)
         else
             return error.MissingRegisterOffset,
+        .count = if (node.get_attribute("count")) |count_str|
+            try std.fmt.parseInt(u64, count_str, 0)
+        else
+            null,
     });
     errdefer db.destroy_entity(id);
 
