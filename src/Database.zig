@@ -324,6 +324,7 @@ pub fn destroy_entity(db: *Database, id: EntityId) void {
             log.debug("{}: destroying peripheral", .{id});
             // TODO: remove children
             _ = db.types.peripherals.swapRemove(id);
+            _ = db.instances.peripherals.swapRemove(id);
         },
         else => {},
     }
