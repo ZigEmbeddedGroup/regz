@@ -198,26 +198,33 @@ fn infer_peripheral_offset(ctx: *Context, type_id: EntityId, instance_id: Entity
     // TODO: assert that there's only one instance using this type
 
     var min_offset: ?u64 = null;
+    var max_size: u64 = 8;
     // first find the min offset of all the registers for this peripheral
     const register_set = db.children.registers.get(type_id) orelse return;
     for (register_set.keys()) |register_id| {
         const offset = db.attrs.offset.get(register_id) orelse continue;
-
         if (min_offset == null)
             min_offset = offset
         else
             min_offset = @min(min_offset.?, offset);
+
+        if (db.attrs.size.get(register_id)) |size|
+            max_size = @max(max_size, size);
     }
 
     if (min_offset == null)
         return error.NoRegisters;
 
-    const instance_offset: u64 = db.attrs.offset.get(instance_id) orelse 0;
-    try db.attrs.offset.put(db.gpa, instance_id, instance_offset + min_offset.?);
+    const assumed_align = @min(@divExact(std.math.ceilPowerOfTwoAssert(u64, max_size), 8), 8);
+    const old_instance_offset = db.attrs.offset.get(instance_id) orelse 0;
+    const new_instance_offset = std.mem.alignBackward(u64, old_instance_offset + min_offset.?, assumed_align);
+    const offset_delta = @as(i65, new_instance_offset) - @as(i65, old_instance_offset);
+
+    try db.attrs.offset.put(db.gpa, instance_id, new_instance_offset);
 
     for (register_set.keys()) |register_id| {
         if (db.attrs.offset.getEntry(register_id)) |offset_entry|
-            offset_entry.value_ptr.* -= min_offset.?;
+            offset_entry.value_ptr.* = @intCast(offset_entry.value_ptr.* - offset_delta);
     }
 }
 
