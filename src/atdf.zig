@@ -39,11 +39,11 @@ pub fn load_into_db(db: *Database, doc: xml.Doc) !void {
     defer ctx.deinit();
 
     const root = try doc.get_root_element();
-    var module_it = root.iterate(&.{"modules"}, "module");
+    var module_it = root.iterate(&.{"modules"}, &.{"module"});
     while (module_it.next()) |entry|
         try load_module_type(&ctx, entry);
 
-    var device_it = root.iterate(&.{"devices"}, "device");
+    var device_it = root.iterate(&.{"devices"}, &.{"device"});
     while (device_it.next()) |entry|
         try load_device(&ctx, entry);
 
@@ -75,13 +75,13 @@ fn load_device(ctx: *Context, node: xml.Node) !void {
     if (node.get_attribute("series")) |series|
         try db.add_device_property(id, "series", series);
 
-    var module_it = node.iterate(&.{"peripherals"}, "module");
+    var module_it = node.iterate(&.{"peripherals"}, &.{"module"});
     while (module_it.next()) |module_node|
         load_module_instances(ctx, module_node, id) catch |err| {
             log.warn("failed to instantiate module: {}", .{err});
         };
 
-    if (node.find_child("interrupts")) |interrupts_node|
+    if (node.find_child(&.{"interrupts"})) |interrupts_node|
         try load_interrupts(ctx, interrupts_node, id);
 
     try infer_peripheral_offsets(ctx);
@@ -104,11 +104,11 @@ fn load_device(ctx: *Context, node: xml.Node) !void {
 }
 
 fn load_interrupts(ctx: *Context, node: xml.Node, device_id: EntityId) !void {
-    var interrupt_it = node.iterate(&.{}, "interrupt");
+    var interrupt_it = node.iterate(&.{}, &.{"interrupt"});
     while (interrupt_it.next()) |interrupt_node|
         try load_interrupt(ctx, interrupt_node, device_id);
 
-    var interrupt_group_it = node.iterate(&.{}, "interrupt-group");
+    var interrupt_group_it = node.iterate(&.{}, &.{"interrupt-group"});
     while (interrupt_group_it.next()) |interrupt_group_node|
         try load_interrupt_group(ctx, interrupt_group_node, device_id);
 }
@@ -294,7 +294,7 @@ fn infer_enum_size(db: *Database, enum_id: EntityId) !void {
 
 // TODO: instances use name in module
 fn get_inlined_register_group(parent_node: xml.Node, parent_name: []const u8) ?xml.Node {
-    var register_group_it = parent_node.iterate(&.{}, "register-group");
+    var register_group_it = parent_node.iterate(&.{}, &.{"register-group"});
     const rg_node = register_group_it.next() orelse return null;
     const rg_name = rg_node.get_attribute("name") orelse return null;
     log.debug("rg name is {s}, parent is {s}", .{ rg_name, parent_name });
@@ -332,11 +332,11 @@ fn load_module_type(ctx: *Context, node: xml.Node) !void {
     if (node.get_attribute("caption")) |caption|
         try db.add_description(id, caption);
 
-    var value_group_it = node.iterate(&.{}, "value-group");
+    var value_group_it = node.iterate(&.{}, &.{"value-group"});
     while (value_group_it.next()) |value_group_node|
         try load_enum(ctx, value_group_node, id);
 
-    var interrupt_group_it = node.iterate(&.{}, "interrupt-group");
+    var interrupt_group_it = node.iterate(&.{}, &.{"interrupt-group"});
     while (interrupt_group_it.next()) |interrupt_group_node|
         try load_module_interrupt_group(ctx, interrupt_group_node);
 
@@ -347,7 +347,7 @@ fn load_module_type(ctx: *Context, node: xml.Node) !void {
     if (get_inlined_register_group(node, name)) |register_group_node| {
         try load_register_group_children(ctx, register_group_node, id);
     } else {
-        var register_group_it = node.iterate(&.{}, "register-group");
+        var register_group_it = node.iterate(&.{}, &.{"register-group"});
         while (register_group_it.next()) |register_group_node|
             try load_register_group(ctx, register_group_node, id);
     }
@@ -357,7 +357,7 @@ fn load_module_interrupt_group(ctx: *Context, node: xml.Node) !void {
     const name = node.get_attribute("name") orelse return error.MissingInterruptGroupName;
     try ctx.interrupt_groups.put(ctx.db.gpa, name, .{});
 
-    var interrupt_it = node.iterate(&.{}, "interrupt");
+    var interrupt_it = node.iterate(&.{}, &.{"interrupt"});
     while (interrupt_it.next()) |interrupt_node|
         try load_module_interrupt_group_entry(ctx, interrupt_node, name);
 }
@@ -389,13 +389,13 @@ fn load_register_group_children(
     assert(db.entity_is("type.peripheral", dest_id) or
         db.entity_is("type.register_group", dest_id));
 
-    var mode_it = node.iterate(&.{}, "mode");
+    var mode_it = node.iterate(&.{}, &.{"mode"});
     while (mode_it.next()) |mode_node|
         load_mode(ctx, mode_node, dest_id) catch |err| {
             log.err("{}: failed to load mode: {}", .{ dest_id, err });
         };
 
-    var register_it = node.iterate(&.{}, "register");
+    var register_it = node.iterate(&.{}, &.{ "register", "register-group" });
     while (register_it.next()) |register_node|
         try load_register(ctx, register_node, dest_id);
 }
@@ -572,6 +572,12 @@ fn load_register(
             try std.fmt.parseInt(u64, offset_str, 0)
         else
             return error.MissingRegisterOffset,
+        .kind = if (std.mem.eql(u8, node.get_name(), "register"))
+            .register
+        else if (std.mem.eql(u8, node.get_name(), "register-group"))
+            .register_group
+        else
+            unreachable,
         .count = if (node.get_attribute("count")) |count_str|
             try std.fmt.parseInt(u64, count_str, 0)
         else
@@ -605,13 +611,13 @@ fn load_register(
     }
 
     // assumes that modes are parsed before registers in the register group
-    var mode_it = node.iterate(&.{}, "mode");
+    var mode_it = node.iterate(&.{}, &.{"mode"});
     while (mode_it.next()) |mode_node|
         load_mode(ctx, mode_node, id) catch |err| {
             log.err("{}: failed to load mode: {}", .{ id, err });
         };
 
-    var field_it = node.iterate(&.{}, "bitfield");
+    var field_it = node.iterate(&.{}, &.{"bitfield"});
     while (field_it.next()) |field_node|
         load_field(ctx, field_node, id) catch {};
 }
@@ -769,7 +775,7 @@ fn load_enum(
     if (node.get_attribute("caption")) |caption|
         try db.add_description(id, caption);
 
-    var value_it = node.iterate(&.{}, "value");
+    var value_it = node.iterate(&.{}, &.{"value"});
     while (value_it.next()) |value_node|
         load_enum_field(ctx, value_node, id) catch {};
 
@@ -837,7 +843,7 @@ fn load_module_instances(
         }
     };
 
-    var instance_it = node.iterate(&.{}, "instance");
+    var instance_it = node.iterate(&.{}, &.{"instance"});
     while (instance_it.next()) |instance_node|
         try load_module_instance(ctx, instance_node, device_id, type_id);
 }
@@ -896,14 +902,14 @@ fn load_module_instance_from_peripheral(
     } else {
         return error.Todo;
         //unreachable;
-        //var register_group_it = node.iterate(&.{}, "register-group");
+        //var register_group_it = node.iterate(&.{}, &.{"register-group"});
         //while (register_group_it.next()) |register_group_node|
         //    loadRegisterGroupInstance(db, register_group_node, id, peripheral_type_id) catch {
         //        log.warn("skipping register group instance in {s}", .{name});
         //    };
     }
 
-    var signal_it = node.iterate(&.{"signals"}, "signal");
+    var signal_it = node.iterate(&.{"signals"}, &.{"signal"});
     while (signal_it.next()) |signal_node|
         try load_signal(ctx, signal_node, id);
 
@@ -918,7 +924,7 @@ fn load_module_instance_from_register_group(
 ) !void {
     const db = ctx.db;
     const register_group_node = blk: {
-        var it = node.iterate(&.{}, "register-group");
+        var it = node.iterate(&.{}, &.{"register-group"});
         const ret = it.next() orelse return error.MissingInstanceRegisterGroup;
         if (it.next() != null) {
             return error.TodoInstanceWithMultipleRegisterGroups;

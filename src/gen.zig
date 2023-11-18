@@ -687,7 +687,13 @@ fn write_register(
     else
         "";
 
-    if (db.children.fields.get(register_id)) |field_set| {
+    if (db.attrs.group.contains(register_id)) {
+        try writer.print("{s}: {s}{s},\n", .{
+            std.zig.fmtId(name),
+            array_prefix,
+            std.zig.fmtId(name),
+        });
+    } else if (db.children.fields.get(register_id)) |field_set| {
         var fields = std.ArrayList(EntityWithOffset).init(db.gpa);
         defer fields.deinit();
 
