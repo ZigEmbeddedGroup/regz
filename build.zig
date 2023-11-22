@@ -25,6 +25,7 @@ pub fn build(b: *std.build.Builder) !void {
         .optimize = optimize,
     });
     xml.linkLibrary(libxml2_dep.artifact("xml2"));
+    b.installArtifact(xml);
 
     const regz = b.addExecutable(.{
         .name = "regz",
