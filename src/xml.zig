@@ -46,16 +46,14 @@ pub const Node = struct {
         };
 
         pub fn next(it: *AttrIterator) ?Entry {
-            return if (it.attr) |attr| ret: {
-                if (attr.name) |name|
-                    if (@as(*c.xmlNode, @ptrCast(attr.children)).content) |content| {
-                        defer it.attr = attr.next;
-                        break :ret Entry{
-                            .key = std.mem.span(name),
-                            .value = std.mem.span(content),
-                        };
-                    };
-            } else null;
+            const attr = it.attr orelse return null;
+            const name = attr.name orelse return null;
+            const content = @as(*c.xmlNode, @ptrCast(attr.children)).content orelse return null;
+            it.attr = attr.next;
+            return .{
+                .key = std.mem.span(name),
+                .value = std.mem.span(content),
+            };
         }
     };
 

@@ -12,12 +12,14 @@
     },
     .dependencies = .{
         .libxml2 = .{
-            .url = "https://github.com/mitchellh/zig-build-libxml2/archive/4e80a167d6e13e09e0da77457310401084e758cc.tar.gz",
-            .hash = "1220000fd2a0f192b1aab0c12be0080748e774044399d69a852ffa38a58f2b1dcc09",
+            // temporary use fork until https://github.com/mitchellh/zig-build-libxml2/pull/1 gets merged or issue
+            // gets resolved directly in upstream.
+            .url = "https://github.com/ianprime0509/zig-build-libxml2/archive/4d1b7db156b0e7a19127c652adefdf27799770ab.tar.gz",
+            .hash = "122011b13203141cc965cfe6b070ffb5a8835eb906bb2cfd4650dbc17574e6e36fd5",
         },
         .clap = .{
-            .url = "https://github.com/Hejsil/zig-clap/archive/f49b94700e0761b7514abdca0e4f0e7f3f938a93.tar.gz",
-            .hash = "1220f48518ce22882e102255ed3bcdb7aeeb4891f50b2cdd3bd74b5b2e24d3149ba2",
+            .url = "https://github.com/Hejsil/zig-clap/archive/9c23bcb5aebe0c2542b4de4472f60959974e2222.tar.gz",
+            .hash = "12209e829da9d7d0bc089e4e0cbc07bb882f6192cd583277277da34df53cd05b8f2a",
         },
     },
     .paths = .{""},
