@@ -26,9 +26,9 @@ NOTE: just including that file is not enough to run code on a microcontroller,
 this is a fairly low-level tool and it is intended that the generated code be
 used with something like [microzig](https://github.com/ZigEmbeddedGroup/microzig).
 
-One can get SVD files from your vendor, or another good place is
-[posborne/cmsis-svd](https://github.com/posborne/cmsis-svd/tree/master/data),
-it's a python based SVD parser and they have a large number of files available.
+You can get SVD files from your vendor, or another good place is
+[cmsis-svd](https://github.com/cmsis-svd/cmsis-svd-data),
+it's a community project and they have a large number of files available.
 
 For ATDF you need to unzip the appropriate atpack from the
 [registry](https://packs.download.microchip.com).
