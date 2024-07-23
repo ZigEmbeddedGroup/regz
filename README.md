@@ -1,3 +1,7 @@
+# Archived
+
+This repository has been moved into the [monorepo](https://github.com/ZigEmbeddedGroup/microzig/tree/main/website)
+
 # regz
 
 [![build](https://github.com/ZigEmbeddedGroup/regz/actions/workflows/ci.yml/badge.svg)](https://github.com/ZigEmbeddedGroup/regz/actions/workflows/ci.yml)
